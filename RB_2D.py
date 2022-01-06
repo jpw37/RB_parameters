@@ -235,7 +235,7 @@ class RB_2D(BaseSimulator):
         all parameters, auxiliary equations, and boundary conditions are already
         defined.
         """
-        self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz))  - dt(zeta)) = v*dx(zeta) + w*zetaz")
+        self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz))  - dt(zeta) = v*dx(zeta) + w*zetaz")
         self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz) = - v*dx(T) - w*Tz")
 
 

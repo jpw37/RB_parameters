@@ -62,9 +62,10 @@ class RB_2D_assim(RB_2D):
         all parameters, auxiliary equations, and boundary conditions are already
         defined.
         """
-
+        print('Current state of driving parameter: ', self.problem.parameters["driving"])
         self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz)) - dt(zeta) = v*dx(zeta) + w*zetaz - mu*driving")
         self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz)= - v*dx(T) - w*Tz")
+        print('Current state of driving parameter: ', self.problem.parameters["driving"])
 
     def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, **kwargs):
         """
@@ -101,7 +102,8 @@ class RB_2D_assim(RB_2D):
         self.N = N
 
         # GeneralFunction for driving
-        self.problem.parameters['driving'] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
+        self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
+        print('Current state of driving parameter: ', self.problem.parameters["driving"])
 
     def plot_convergence(self, savefig=True):
         """Plot the six measures of convergence over time."""
@@ -346,3 +348,124 @@ class RB_2D_assim(RB_2D):
         if os.path.isfile(oldfile):
             self.logger.info("\tDeleting old animation '{}'".format(oldfile))
             os.remove(oldfile)
+
+
+# RB_2D_assimilator ============================================================
+
+class RB_2D_assimilator(object):
+    """A class to run data assimilations on the 2D RB system
+    """
+
+    def __init__(self, projector, outdir='new_run', L=4, xsize=384, zsize=192, Prandtl=1,
+                 Rayleigh=1e6, mu = 1, N=32, warmup_time=2, warmup_dt=1e-5,
+                 overwrite=False, final_sim_time=5):
+        """Run normal 2D RB for warmup_time to get into the turbulent setting.
+        """
+
+        # The system we are gathering low-mode data from
+        self.truth = RB_2D(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh)
+        self.truth.setup_simulation(wall_time=1e10, sim_time=warmup_time)
+
+        # The assimalating system
+        self.estimator = RB_2D_assim(projector=projector, mu=mu, N=N, L=L, xsize=xsize,
+                                  zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh)
+
+        print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
+
+        self.estimator.setup_simulation(wall_time=1e10, sim_time=final_sim_time)
+        #estimator.finalize_solver(truth.solver.state['zeta'])
+
+        print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
+
+        self.final_sim_time = final_sim_time
+
+    def run_simulation(self):
+
+        print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
+
+        # Perform the warmup loop
+        self.truth.logger.info("Starting warmup loop")
+        self.truth.run_simulation()
+
+        # Add the rest of the time to the truth solver
+        self.truth.solver.stop_sim_time += self.final_sim_time
+
+        # Run the simulation
+        try:
+
+            # Log entrance into main loop, start counter
+            self.truth.logger.info("Starting main loop")
+            self.estimator.logger.info("Starting main loop")
+            start_time = time.time()
+
+            # Iterate
+            while self.truth.solver.ok & self.estimator.solver.ok:
+
+                # Use CFL condition to compute time step
+                dt = np.min([self.truth.cfl.compute_dt(), self.estimator.cfl.compute_dt()])
+
+                # Step the truth simulation
+                self.truth.solver.step(dt)
+
+                # true state
+                self.zeta = self.truth.solver.state['zeta']
+                self.zeta.set_scales(1)
+
+                # assimilating state
+                self.zeta_assim = self.estimator.solver.state['zeta']
+                self.zeta_assim.set_scales(1)
+
+                # Get projection of difference between assimilating state and true state
+                self.dzeta = self.estimator.problem.domain.new_field(name='dzeta')
+                self.dzeta['g'] = self.zeta_assim['g'] - self.zeta['g']
+
+                # Substitute this projection for the "driving" parameter in the assimilating system
+
+                print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
+
+                #self.estimator.problem.parameters["driving"].args = [self.dzeta, self.estimator.N]
+
+                # self.estimator.problem.parameters["driving"] = P_N(self.dzeta, self.estimator.N)
+
+                self.estimator.problem.parameters["driving"] = GeneralFunction(self.estimator.problem.domain, 'g', P_N, args=[self.dzeta, self.estimator.N])
+
+                print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
+                #estimator.problem.parameters["driving"].original_args = [dzeta, self.N]
+
+                # Step the estimator
+                self.estimator.solver.step(dt)
+
+                # Record properties every tenth iteration
+                if self.truth.solver.iteration % 10 == 0:
+
+                    # Calculate max Re number
+                    Re = self.truth.flow.max("Re")
+                    Re_assim = self.estimator.flow.max("Re")
+
+                    # Output diagnostic info to log
+                    info = "Truth Iteration {:>5d}, Time: {:.7f}, dt: {:.2e}, Max Re = {:f}".format(
+                        self.truth.solver.iteration, self.truth.solver.sim_time, dt, Re)
+                    self.truth.logger.info(info)
+
+                    # Output diagnostic info for assimilating system
+                    info_assim = "Estimator iteration {:>5d}, Time: {:.7f}, dt: {:.2e}, Max Re = {:f}".format(
+                        self.estimator.solver.iteration, self.estimator.solver.sim_time, dt, Re)
+                    self.estimator.logger.info(info_assim)
+
+                    if np.isnan(Re):
+                        raise ValueError("Reynolds number went to infinity!!"
+                                         "\nRe = {}", format(Re))
+                    if np.isnan(Re_assim):
+                        raise ValueError("Reynolds number went to infinity in assimilating system!!"
+                                         "\nRe = {}", format(Re_assim))
+        except BaseException as e:
+            self.truth.logger.error("Exception raised, triggering end of main loop.")
+            raise
+        finally:
+            total_time = time.time()-start_time
+            cpu_hr = total_time/60/60*SIZE
+            self.truth.logger.info("Iterations: {:d}".format(self.truth.solver.iteration))
+            self.truth.logger.info("Sim end time: {:.3e}".format(self.truth.solver.sim_time))
+            self.truth.logger.info("Run time: {:.3e} sec".format(total_time))
+            self.truth.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
+            self.truth.logger.debug("END OF SIMULATION")

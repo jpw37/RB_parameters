@@ -10,10 +10,10 @@ import sys
 from tqdm import tqdm
 
 
-#@staticmethod        
+#@staticmethod
 def P_N(F, N, scale=False):
     """Calculate the Fourier mode projection of F with N terms."""
-    # Set the c_n to zero wherever n > N (in both axes).                                                                                                
+    # Set the c_n to zero wherever n > N (in both axes).
     X,Y = np.indices(F['c'].shape)
     F['c'][(X >= N) | (Y >= N)] = 0
 
