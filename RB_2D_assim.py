@@ -62,10 +62,8 @@ class RB_2D_assim(RB_2D):
         all parameters, auxiliary equations, and boundary conditions are already
         defined.
         """
-        print('Current state of driving parameter: ', self.problem.parameters["driving"])
         self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz)) - dt(zeta) = v*dx(zeta) + w*zetaz - mu*driving")
         self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz)= - v*dx(T) - w*Tz")
-        print('Current state of driving parameter: ', self.problem.parameters["driving"])
 
     def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, **kwargs):
         """
@@ -103,7 +101,6 @@ class RB_2D_assim(RB_2D):
 
         # GeneralFunction for driving
         self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
-        print('Current state of driving parameter: ', self.problem.parameters["driving"])
 
     def plot_convergence(self, savefig=True):
         """Plot the six measures of convergence over time."""
@@ -353,35 +350,98 @@ class RB_2D_assim(RB_2D):
 # RB_2D_assimilator ============================================================
 
 class RB_2D_assimilator(object):
-    """A class to run data assimilations on the 2D RB system
+    """
+    A class to run data assimilation on the 2D RB system.
     """
 
-    def __init__(self, projector, outdir='new_run', L=4, xsize=384, zsize=192, Prandtl=1,
-                 Rayleigh=1e6, mu = 1, N=32, warmup_time=2, warmup_dt=1e-5,
-                 overwrite=False, final_sim_time=5):
-        """Run normal 2D RB for warmup_time to get into the turbulent setting.
+    def __init__(self, L=4, xsize=384, zsize=192, Prandtl=1, Rayleigh=1e6, mu = 1, N=32, BCs = 'no-slip', **kwargs):
+
+        """
+        Creates an instance of RB_2D representing the "true" system which is being
+        measured, and an instance of RB_2D_assim representing the nudged system
+        which converges to the state of the true system.
+
+        Required Parameters:
+            L (float): the length of the x domain. In x and z, the domain is
+                therefore [0,L]x[0,1].
+            xsize (int): the number of points to discretize in the x direction.
+            zsize (int): the number of points to discretize in the z direction.
+            Prandtl (None or float): the ratio of momentum diffusivity to
+                thermal diffusivity of the fluid. If None (default), then
+                the system is set up as if Prandtl = infinity.
+            Rayleigh (float): measures the amount of heat transfer due to
+                convection, as opposed to conduction.
+            mu (float): constant on the Fourier projection in the
+                Data Assimilation system.
+            N (int): the number of modes to keep in the Fourier projection.
+            BCs (str): if 'no-slip', use the no-slip BCs u(z=0,1) = 0.
+                If 'free-slip', use the free-slip BCs u_z(z=0,1) = 0.
         """
 
         # The system we are gathering low-mode data from
-        self.truth = RB_2D(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh)
-        self.truth.setup_simulation(wall_time=1e10, sim_time=warmup_time)
+        self.truth = RB_2D(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh, BCs=BCs, **kwargs)
 
         # The assimalating system
-        self.estimator = RB_2D_assim(projector=projector, mu=mu, N=N, L=L, xsize=xsize,
-                                  zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh)
+        self.estimator = RB_2D_assim(mu=mu, N=N, L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh, BCs=BCs, **kwargs)
 
-        print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
+    def setup_simulation(self, scheme=de.timesteppers.RK443, warmup_time=2, final_sim_time=5, wall_time=1e10, stop_iteration=np.inf,
+                        tight=False, save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None, **kwargs):
+        """
+        scheme (string, de.timestepper): The kind of solver to use. Options are
+            RK443 (de.timesteppers.RK443), RK111, RK222, RKSMR, etc.
+        warmup_time (float): The maximum amount of warmup time allowed
+            (in seconds) before ending the simulation.
+        final_sim_time (float): The maximum amount of simulation time allowed
+            (in seconds) before ending the simulation.
+        wall_time (float): The maximum amound of computing time allowed
+            (in seconds) before ending the simulation.
+        stop_iteration (numeric): The maximum amount of iterations allowed
+            before ending the simulation
+        save (float): The number of simulation seconds that pass between
+            saving the state files. Higher save result in smaller data
+            files, but lower numbers result in better animations.
+            Set to 0 to disable saving state files.
+        save_tasks (list of str): which state variables to save. If None,
+            uses ['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz'].
 
-        self.estimator.setup_simulation(wall_time=1e10, sim_time=final_sim_time)
-        #estimator.finalize_solver(truth.solver.state['zeta'])
+        analysis (bool): Whether or not to track convergence measurements.
+            Disable for faster simulations (less message passing via MPI)
+            when convergence estimates are not needed (i.e. movie only).
+        analysis_tasks (list of 2-tuples of strs): which analysis tasks to
+            perform, given as a list of (task, name) pairs. If None, uses a
+            default list.
 
-        print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
+        initial_conditions (None, str): determines from what source to
+            draw the initial conditions. Valid options are as follows:
+            - None: use trivial conditions (T_ = 1 - z, T = 1 - z + eps).
+            - 'resume': use the most recent state file in the
+                records directory (load both model and DA system).
+            - An .h5 filename: load state variables for the model and
+                reset the data assimilation state variables to zero.
 
+        #### Not Implemented
+        tight (bool): If True, set a low cadence and min_dt for refined
+            simulation. If False, set a higher cadence and min_dt for a
+            more coarse (but faster) simulation.
+        """
+        # The system we are gathering low-mode data from
+        self.truth.setup_simulation(scheme=scheme, sim_time=warmup_time, wall_time=wall_time, stop_iteration=stop_iteration, tight=tight,
+                           save=save, save_tasks=save_tasks, analysis=analysis, analysis_tasks=analysis_tasks, initial_conditions=initial_conditions, **kwargs)
+
+        # The assimalating system
+        self.estimator.setup_simulation(scheme=scheme, sim_time=final_sim_time, wall_time=wall_time, stop_iteration=stop_iteration, tight=tight,
+                           save=save, save_tasks=save_tasks, analysis=analysis, analysis_tasks=analysis_tasks, initial_conditions=initial_conditions, **kwargs)
+
+        # Record final_sim_time
         self.final_sim_time = final_sim_time
 
     def run_simulation(self):
-
-        print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
+        """
+        Runs the simulations and performs data assimilation. First puts the "true"
+        system through a warmup loop, then steps through the true and estimator
+        systems simultaneously, updating parameters in the estimating system at
+        each time step.
+        """
 
         # Perform the warmup loop
         self.truth.logger.info("Starting warmup loop")
@@ -420,17 +480,8 @@ class RB_2D_assimilator(object):
                 self.dzeta['g'] = self.zeta_assim['g'] - self.zeta['g']
 
                 # Substitute this projection for the "driving" parameter in the assimilating system
-
-                print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
-
-                #self.estimator.problem.parameters["driving"].args = [self.dzeta, self.estimator.N]
-
-                # self.estimator.problem.parameters["driving"] = P_N(self.dzeta, self.estimator.N)
-
-                self.estimator.problem.parameters["driving"] = GeneralFunction(self.estimator.problem.domain, 'g', P_N, args=[self.dzeta, self.estimator.N])
-
-                print('Current state of driving parameter: ', self.estimator.problem.parameters["driving"])
-                #estimator.problem.parameters["driving"].original_args = [dzeta, self.N]
+                if self.estimator.solver.iteration == 0: self.estimator.problem.parameters["driving"].original_args = [self.dzeta, self.estimator.N]
+                self.estimator.problem.parameters["driving"].args = [self.dzeta, self.estimator.N]
 
                 # Step the estimator
                 self.estimator.solver.step(dt)

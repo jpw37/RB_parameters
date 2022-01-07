@@ -200,35 +200,6 @@ class RB_2D(BaseSimulator):
             # u'(z=1) = 0 --> v'(z=1) = 0 = w(z=1)
             self.problem.add_bc("right(dz(psiz))  = 0")
 
-    # def setup_projection(self, N):
-    #     """
-    #     Follows Dedalus documentation to define a projection operator P_N in the
-    #     dedalus parsing namespace.
-    #
-    #     The projection P_N discards all Fourier modes greater than N in either axis.
-    #     """
-    #
-    #     # The projection function we would like to apply to the field data
-    #     def projection(F, scale=False):
-    #         """
-    #         Calculate the Fourier mode projection of F with N terms.
-    #         """
-    #         # Set the c_n to zero wherever n > N (in both axes).
-    #         X,Y = np.indices(F['c'].shape)
-    #         F['c'][(X >= N) | (Y >= sN)] = 0
-    #
-    #         if scale: F.set_scales(1)
-    #
-    #         return F['g']
-    #
-    #     # A wrapper which returns a GeneralFunction instance which applies the projection
-    #     def projection_operator(F):
-    #
-    #         return de.operators.GeneralFunction(self.problem.domain, layout='g', func=projection, args=(F,))
-    #
-    #     # Add the wrapper to the parsing namespace
-    #     de.operators.parseables['P_N'] = projection_operator
-
     def setup_evolution(self, **kwargs):
         """
         Sets up the main Boussinesq evolution equations (without nudging), assuming
@@ -240,7 +211,7 @@ class RB_2D(BaseSimulator):
 
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=60, stop_iteration=np.inf, tight=False,
-                       save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None):
+                       save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None, **kwargs):
         """
         Load initial conditions, run the simulation, and merge results.
 
