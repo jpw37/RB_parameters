@@ -485,6 +485,7 @@ class RB_2D_assimilator(object):
 
                 # Step the estimator
                 self.estimator.solver.step(dt)
+                self.truth.solver.step(dt)
 
                 # Record properties every tenth iteration
                 if self.truth.solver.iteration % 10 == 0:
