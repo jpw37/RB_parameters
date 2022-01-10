@@ -64,7 +64,7 @@ class RB_2D_params(RB_2D_assim):
         self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz)) - dt(zeta) = v*dx(zeta) + w*zetaz - mu*driving - PrRa_coeff*dx(T) - Pr_coeff*(dx(dx(zeta)) + dz(zetaz))")
         self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz) = -v*dx(T) - w*Tz")
 
-    def const_val(self, value):
+    def const_val(self, value, return_field=False):
         """
         Assuming that the problem is already defined, create a new field on the
         problem's domain with constant value given by the argument value.
@@ -74,7 +74,10 @@ class RB_2D_params(RB_2D_assim):
         """
         coefficient_field = self.problem.domain.new_field()
         coefficient_field['g'] = value
-        return coefficient_field #somehow need to make this so that the field isn't defined every time it is called, and the domain is available...maybe define a field at the initial step and then have that stored in self, then adjusted as necessary?
+        if return_field:
+            return coefficient_field #somehow need to make this so that the field isn't defined every time it is called, and the domain is available...maybe define a field at the initial step and then have that stored in self, then adjusted as necessary?
+        else:
+            return np.pad(coefficient_field['g'], ((self.problem.parameters['xsize']//4,self.problem.parameters['xsize']//4), (self.problem.parameters['zsize']//4,self.problem.parameters['zsize']//4)))
 
     def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, **kwargs):
         """
@@ -135,53 +138,69 @@ class RB_2D_params(RB_2D_assim):
         Parameters:
             zeta (dedalus field): The true system state
         """
+        # Slice used to slice off the extra zero padding due to dealias=3/2
+        dealias_slice = np.s_[self.problem.parameters['xsize']//4:-self.problem.parameters['xsize']//4, self.problem.parameters['zsize']//4:-self.problem.parameters['zsize']//4]
 
         # Get estimated state and backward time derivative
         zeta_tilde = self.solver.state['zeta']
         zeta_t = self.backward_time_derivative()
 
         # set up the alpha_i coefficients
-        laplace_zeta = zeta_tilde.differentiate(x=2)+zeta_tilde.differentiate(z=2)
-        Ih_laplace_zeta = P_N(laplace_zeta, self.N)
+        Ih_laplace_zeta = self.problem.domain.new_field()
+        laplace_zeta = (zeta_tilde.differentiate(x=2)+zeta_tilde.differentiate(z=2))
+        Ih_laplace_zeta['g'] = P_N(laplace_zeta, self.N)[dealias_slice]
 
         # set up the beta_i coefficients
-        Ih_zeta_x = P_N(zeta_tilde.differentiate(x=1),self.N)
+        Ih_zeta_x = self.problem.domain.new_field()
+        Ih_zeta_x['g'] = P_N(zeta_tilde.differentiate(x=1),self.N)[dealias_slice]
 
         # set up the gamma_i coefficients
         remainder = self.problem.domain.new_field()
         nonlinear_term = self.problem.domain.new_field()
-        nonlinear_term['g'] = self.solver.state['v']['g']*zeta_tilde.differentiate(x=1)['g'] + self.solver.state['w']['g']*zeta_tilde.differentiate(z=1)['g']
-        remainder['g'] = mu*(zeta['g'] - zeta_tilde['g']) - nonlinear_term['g'] - zeta_t['g']
-        Ih_remainder = P_N(remainder, self.N)
+        zeta_error = self.problem.domain.new_field()
+        Ih_remainder = self.problem.domain.new_field()
+
+        zeta_error['g'] = zeta['g'] - zeta_tilde['g'][dealias_slice]
+
+        # v = -psi_z, w = psi_x
+        nonlinear_term['g'] = (-self.solver.state['psi'].differentiate(z=1)['g']*zeta_tilde.differentiate(x=1)['g'] + self.solver.state['psi'].differentiate(x=1)['g']*zeta_tilde.differentiate(z=1)['g'])[dealias_slice]
+        remainder['g'] = self.mu*zeta_error['g'] - nonlinear_term['g'] - zeta_t['g']
+        Ih_remainder['g'] = P_N(remainder, self.N)
 
         e1 = self.problem.domain.new_field()
         e2 = self.problem.domain.new_field()
 
         #set e1 to be the projection of the error, guaranteeing exponential decay of the error
-        e1 = P_N(zeta-zeta_tilde,self.N)#JPW: check the order of this, should it be zeta_tilde-zeta?
-        e2 = Ih_laplace_zeta #start with this choice...others are possible
+        e1['g'] = P_N(zeta_error, self.N)#JPW: check the order of this, should it be zeta_tilde-zeta?
+        e2['g'] = Ih_laplace_zeta['g'] #start with this choice...others are possible
         #JPW: use I_h(error) as e_1, then start with something already computed, i.e. laplace operator (probably not nonlinear term...stick with linear differential operator ie don't square anything).  Use modified Gram-Schmidt to force this to be orthogonal to e_1 to give the 2nd direction
 
         # now perform modified Gram-Schmidt on e1 and e2 (no need to normalize I don't think)
-        e2['g'] = e2['g'] - de.operators.integrate(e1*e2,'x','z')*e1['g']
+        c = de.operators.integrate(e1*e2,'x','z')['g']*e1['g']
+        e2['g'] = e2['g'] - c
 
         # Now e1 and e2 should be orthogonal. Calculate the coefficients
-        alpha1 = de.operators.integrate(e1*Ih_laplace_zeta, 'x', 'z')
-        alpha2 = de.operators.integrate(e2*Ih_laplace_zeta, 'x', 'z')
+        alpha1 = de.operators.integrate(e1*Ih_laplace_zeta, 'x', 'z')['g'][0,0]
+        alpha2 = de.operators.integrate(e2*Ih_laplace_zeta, 'x', 'z')['g'][0,0]
 
-        beta1 = de.operators.integrate(e1*Ih_zeta_x, 'x', 'z')
-        beta2 = de.operators.integrate(e2*Ih_zeta_x, 'x', 'z')
+        beta1 = de.operators.integrate(e1*Ih_zeta_x, 'x', 'z')['g'][0,0]
+        beta2 = de.operators.integrate(e2*Ih_zeta_x, 'x', 'z')['g'][0,0]
 
-        gamma1 = de.operators.integrate(e1*Ih_remainder, 'x', 'z')
-        gamma2 = de.operators.integrate(e2*Ih_remainder, 'x', 'z')
+        gamma1 = de.operators.integrate(e1*Ih_remainder, 'x', 'z')['g'][0,0]
+        gamma2 = de.operators.integrate(e2*Ih_remainder, 'x', 'z')['g'][0,0]
 
         # Set up linear system and solve
         A = np.array([[alpha1, beta1], [alpha2, beta2]])
         b = np.array([[gamma1], [gamma2]])
-        Pr, PrRa = np.linalg.solve(A,b)
-
-        # Return estimated coefficients
-        return Pr, PrRa/Pr
+        print()
+        print('Matrix: ', A, 'Vector: ', b)
+        print()
+        try:
+            Pr, PrRa = np.linalg.solve(A,b)
+            # Return estimated coefficients
+            return Pr, PrRa/Pr
+        except: # if the matrix is singular
+            return 0., 0.
 
     def backward_time_derivative(self):
         """
@@ -190,9 +209,11 @@ class RB_2D_params(RB_2D_assim):
         in the main document.
         """
 
+        ### NOTE: Use projection of true state.
+
         if None in self.dt_hist:
             # There may be a better way to do this.  Right now zeta_t=0 for the first 2 time steps
-            zeta_t = self.const_val(0.)
+            zeta_t = self.const_val(0., return_field=True)
 
         else:
             dt = self.dt_hist
@@ -208,7 +229,7 @@ class RB_2D_params(RB_2D_assim):
             #Now using these coefficients we compute a 2nd order backward difference
             #approximation to the derivative of the vorticity
             zeta_t = self.problem.domain.new_field()
-            zeta_t['g'] = c0*self.solver.state['zeta']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]
+            zeta_t['g'] = c0*self.solver.state['zeta']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
 
         return zeta_t
 
@@ -299,9 +320,12 @@ class RB_2D_estimator(RB_2D_assimilator):
                 self.estimator.problem.parameters["driving"].args = [self.dzeta, self.estimator.N]
 
                 # Update the Parameters
-                Pr_est, Ra_est = self.estimator.new_params(self.zeta)
+                new = self.estimator.new_params(self.zeta)
+                Pr_est, Ra_est = new[0], new[1]
                 Pr_coeff = Pr_est - self.truth.problem.parameters['Pr']
                 PrRa_coeff = Pr_est*Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
+
+                print('Pr_coeff: ', Pr_coeff, 'PrRa_coeff', PrRa_coeff)
 
                 if self.estimator.solver.iteration == 0:
                     self.estimator.problem.parameters['Pr_coeff'].original_args = [Pr_coeff]
@@ -310,11 +334,13 @@ class RB_2D_estimator(RB_2D_assimilator):
                 self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
 
                 # Step the estimator
+                print('dt: ', dt)
+                self.truth.solver.step(dt)
                 self.estimator.solver.step(dt)
 
                 # Update steps and dt history
-                self.prev_state = [self.prev_state[-1], self.estimator.solver.state['zeta']]
-                self.dt_hist = [self.dt_hist[-1], dt]
+                self.estimator.prev_state = [self.estimator.prev_state[-1], self.estimator.solver.state['zeta']]
+                self.estimator.dt_hist = [self.estimator.dt_hist[-1], dt]
 
                 # Record properties every tenth iteration
                 if self.truth.solver.iteration % 10 == 0:
