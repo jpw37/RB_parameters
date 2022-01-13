@@ -130,6 +130,9 @@ class RB_2D_params(RB_2D_assim):
         self.prev_state = [None] * 2
         self.dt_hist = [None] * 2
 
+        # Slice used to slice off the extra zero padding due to dealias=3/2
+        self.dealias_slice = np.s_[self.problem.parameters['xsize']//4:-self.problem.parameters['xsize']//4, self.problem.parameters['zsize']//4:-self.problem.parameters['zsize']//4]
+
     def new_params(self, zeta):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
@@ -138,8 +141,6 @@ class RB_2D_params(RB_2D_assim):
         Parameters:
             zeta (dedalus field): The true system state
         """
-        # Slice used to slice off the extra zero padding due to dealias=3/2
-        dealias_slice = np.s_[self.problem.parameters['xsize']//4:-self.problem.parameters['xsize']//4, self.problem.parameters['zsize']//4:-self.problem.parameters['zsize']//4]
 
         # Get estimated state and backward time derivative
         zeta_tilde = self.solver.state['zeta']
@@ -148,11 +149,11 @@ class RB_2D_params(RB_2D_assim):
         # set up the alpha_i coefficients
         Ih_laplace_zeta = self.problem.domain.new_field()
         laplace_zeta = (zeta_tilde.differentiate(x=2)+zeta_tilde.differentiate(z=2))
-        Ih_laplace_zeta['g'] = P_N(laplace_zeta, self.N)[dealias_slice]
+        Ih_laplace_zeta['g'] = P_N(laplace_zeta, self.N)[self.dealias_slice]
 
         # set up the beta_i coefficients
-        Ih_zeta_x = self.problem.domain.new_field()
-        Ih_zeta_x['g'] = P_N(zeta_tilde.differentiate(x=1),self.N)[dealias_slice]
+        Ih_temp_x = self.problem.domain.new_field()
+        Ih_temp_x['g'] = P_N(self.solver.state['T'].differentiate(x=1),self.N)[self.dealias_slice]
 
         # set up the gamma_i coefficients
         remainder = self.problem.domain.new_field()
@@ -160,11 +161,11 @@ class RB_2D_params(RB_2D_assim):
         zeta_error = self.problem.domain.new_field()
         Ih_remainder = self.problem.domain.new_field()
 
-        zeta_error['g'] = zeta['g'] - zeta_tilde['g'][dealias_slice]
+        zeta_error['g'] = zeta['g'] - zeta_tilde['g'][self.dealias_slice]
 
         # v = -psi_z, w = psi_x
-        nonlinear_term['g'] = (-self.solver.state['psi'].differentiate(z=1)['g']*zeta_tilde.differentiate(x=1)['g'] + self.solver.state['psi'].differentiate(x=1)['g']*zeta_tilde.differentiate(z=1)['g'])[dealias_slice]
-        remainder['g'] = self.mu*zeta_error['g'] - nonlinear_term['g'] - zeta_t['g']
+        nonlinear_term['g'] = (-self.solver.state['psi'].differentiate(z=1)['g']*zeta_tilde.differentiate(x=1)['g'] + self.solver.state['psi'].differentiate(x=1)['g']*zeta_tilde.differentiate(z=1)['g'])[self.dealias_slice]
+        remainder['g'] = nonlinear_term['g'] + zeta_t['g']
         Ih_remainder['g'] = P_N(remainder, self.N)
 
         e1 = self.problem.domain.new_field()
@@ -183,10 +184,10 @@ class RB_2D_params(RB_2D_assim):
         alpha1 = de.operators.integrate(e1*Ih_laplace_zeta, 'x', 'z')['g'][0,0]
         alpha2 = de.operators.integrate(e2*Ih_laplace_zeta, 'x', 'z')['g'][0,0]
 
-        beta1 = de.operators.integrate(e1*Ih_zeta_x, 'x', 'z')['g'][0,0]
-        beta2 = de.operators.integrate(e2*Ih_zeta_x, 'x', 'z')['g'][0,0]
+        beta1 = de.operators.integrate(e1*Ih_temp_x, 'x', 'z')['g'][0,0]
+        beta2 = de.operators.integrate(e2*Ih_temp_x, 'x', 'z')['g'][0,0]
 
-        gamma1 = de.operators.integrate(e1*Ih_remainder, 'x', 'z')['g'][0,0]
+        gamma1 = -self.mu * de.operators.integrate(e1**2, 'x', 'z')['g'][0,0] + de.operators.integrate(e1*Ih_remainder, 'x', 'z')['g'][0,0]
         gamma2 = de.operators.integrate(e2*Ih_remainder, 'x', 'z')['g'][0,0]
 
         # Set up linear system and solve
@@ -205,7 +206,7 @@ class RB_2D_params(RB_2D_assim):
     def backward_time_derivative(self):
         """
         Calculuate the time derivative of the observed vorticity based off of
-        the observed system. Derivation of the derivative approximation is made
+        the estimating system. Derivation of the derivative approximation is made
         in the main document.
         """
 
@@ -284,6 +285,13 @@ class RB_2D_estimator(RB_2D_assimilator):
 
         # Add the rest of the time to the truth solver
         self.truth.solver.stop_sim_time += self.final_sim_time
+
+        # Set initial conditions for estimating system to simply be projections of the initial state of the estimating system
+        for variable in self.truth.problem.variables:
+            if self.estimator.solver.state[variable]['g'].shape != self.truth.solver.state[variable]['g'].shape:
+                self.estimator.solver.state[variable]['g'] = P_N(self.truth.solver.state[variable], self.estimator.N)[self.estimator.dealias_slice]
+            else:
+                self.estimator.solver.state[variable]['g'] = P_N(self.truth.solver.state[variable], self.estimator.N)
 
         # Run the simulation
         try:

@@ -450,6 +450,10 @@ class RB_2D_assimilator(object):
         # Add the rest of the time to the truth solver
         self.truth.solver.stop_sim_time += self.final_sim_time
 
+        # Set initial conditions for estimating system to simply be projections of the initial state of the estimating system
+        for variable in self.truth.problem.variables:
+            self.estimator.solver.state[variable]['g'] = P_N(self.truth.solver.state[variable], self.estimator.N)
+
         # Run the simulation
         try:
 
