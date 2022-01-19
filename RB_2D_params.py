@@ -77,7 +77,7 @@ class RB_2D_params(RB_2D_assim):
         if return_field:
             return coefficient_field #somehow need to make this so that the field isn't defined every time it is called, and the domain is available...maybe define a field at the initial step and then have that stored in self, then adjusted as necessary?
         else:
-            return np.pad(coefficient_field['g'], ((self.problem.parameters['xsize']//4,self.problem.parameters['xsize']//4), (self.problem.parameters['zsize']//4,self.problem.parameters['zsize']//4)))
+            return np.pad(coefficient_field['g'], pad_width=((self.problem.parameters['xsize']//4,self.problem.parameters['xsize']//4), (self.problem.parameters['zsize']//4,self.problem.parameters['zsize']//4)), mode='constant', constant_values=0.0)
 
     def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, alpha=1000, **kwargs):
         """
