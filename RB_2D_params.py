@@ -332,10 +332,11 @@ class RB_2D_estimator(RB_2D_assimilator):
             while self.truth.solver.ok & self.estimator.solver.ok:
 
                 # Use CFL condition to compute time step
-                dt = np.min([self.truth.cfl.compute_dt(), self.estimator.cfl.compute_dt()])
+                self.dt = np.min([self.truth.cfl.compute_dt(), self.estimator.cfl.compute_dt()])
 
                 # Step the truth simulation
-                self.truth.solver.step(dt)
+                self.truth.solver.step(self.dt)
+                self.estimator.solver.step(self.dt)
 
                 # true state
                 self.zeta = self.truth.solver.state['zeta']
@@ -369,13 +370,11 @@ class RB_2D_estimator(RB_2D_assimilator):
                 self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
 
                 # Step the estimator
-                print('dt: ', dt)
-                self.truth.solver.step(dt)
-                self.estimator.solver.step(dt)
+                self.estimator.solver.step(self.dt)
 
                 # Update steps and dt history
                 self.estimator.prev_state = [self.estimator.prev_state[-1], self.estimator.solver.state['zeta']]
-                self.estimator.dt_hist = [self.estimator.dt_hist[-1], dt]
+                self.estimator.dt_hist = [self.estimator.dt_hist[-1], self.dt]
 
                 # Record properties every tenth iteration
                 if self.truth.solver.iteration % 10 == 0:
