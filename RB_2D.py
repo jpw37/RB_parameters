@@ -436,10 +436,10 @@ class RB_2D(BaseSimulator):
             while self.solver.ok:
 
                 # Use CFL condition to compute time step
-                dt = self.cfl.compute_dt()
+                self.dt = self.cfl.compute_dt()
 
                 # Step
-                self.solver.step(dt)
+                self.solver.step(self.dt)
 
                 # Record properties every tenth iteration
                 if self.solver.iteration % 10 == 0:
@@ -449,7 +449,7 @@ class RB_2D(BaseSimulator):
 
                     # Output diagnostic info to log
                     info = "Iteration {:>5d}, Time: {:.7f}, dt: {:.2e}, Max Re = {:f}".format(
-                        self.solver.iteration, self.solver.sim_time, dt, Re)
+                        self.solver.iteration, self.solver.sim_time, self.dt, Re)
                     self.logger.info(info)
 
                     if np.isnan(Re):
