@@ -79,7 +79,7 @@ class RB_2D_params(RB_2D_assim):
         else:
             return np.pad(coefficient_field['g'], ((self.problem.parameters['xsize']//4,self.problem.parameters['xsize']//4), (self.problem.parameters['zsize']//4,self.problem.parameters['zsize']//4)))
 
-    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, **kwargs):
+    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, alpha=1000, **kwargs):
         """
         Sets up the parameters for the dedalus IVP problem. Does not set up the
         equations for the problem yet. Assumes self.problem is already defined.
@@ -97,6 +97,7 @@ class RB_2D_params(RB_2D_assim):
             mu (float): constant on the Fourier projection in the
                 Data Assimilation system.
             N (int): the number of modes to keep in the Fourier projection.
+            alpha (float): Relaxation coefficient
         """
         # Domain parameters
         self.problem.parameters['L'] = L
@@ -132,6 +133,9 @@ class RB_2D_params(RB_2D_assim):
 
         # Slice used to slice off the extra zero padding due to dealias=3/2
         self.dealias_slice = np.s_[self.problem.parameters['xsize']//4:-self.problem.parameters['xsize']//4, self.problem.parameters['zsize']//4:-self.problem.parameters['zsize']//4]
+
+        # Relaxation coefficient
+        self.alpha = alpha
 
     def new_params(self, zeta):
         """
@@ -305,10 +309,10 @@ class RB_2D_estimator(RB_2D_assimilator):
             while self.truth.solver.ok & self.estimator.solver.ok:
 
                 # Use CFL condition to compute time step
-                dt = np.min([self.truth.cfl.compute_dt(), self.estimator.cfl.compute_dt()])
+                self.dt = np.min([self.truth.cfl.compute_dt(), self.estimator.cfl.compute_dt()])
 
                 # Step the truth simulation
-                self.truth.solver.step(dt)
+                self.truth.solver.step(self.dt)
 
                 # true state
                 self.zeta = self.truth.solver.state['zeta']
@@ -329,7 +333,17 @@ class RB_2D_estimator(RB_2D_assimilator):
 
                 # Update the Parameters
                 new = self.estimator.new_params(self.zeta)
-                Pr_est, Ra_est = new[0], new[1]
+                new_Pr_est, new_Ra_est = new[0], new[1]
+
+                # Old parameters
+                Pr_est = self.truth.problem.parameters['Pr'] + self.estimator.problem.parameters['Pr_coeff']
+                Ra_est = (self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra'] + self.estimator.problem.parameters['PrRa_coeff'])/old_Pr_est
+
+                # Crank-Nicholson integration for relaxation equation
+                Pr_est = ((1 - 0.5*self.alpha*self.dt)*Pr_est + self.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.alpha*self.dt)
+                Ra_est = ((1 - 0.5*self.alpha*self.dt)*Pr_est + self.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.alpha*self.dt)
+
+                # Set the parameters
                 Pr_coeff = Pr_est - self.truth.problem.parameters['Pr']
                 PrRa_coeff = Pr_est*Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
 
