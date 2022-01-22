@@ -493,6 +493,7 @@ class RB_2D_assimilator(object):
                 self.estimator.problem.parameters["driving"].args = [self.dzeta, self.estimator.N]
 
                 # Step the estimator
+                print(self.estimator.solver.evaluator.handlers)
                 self.estimator.solver.step(self.dt)
 
                 # Record properties every tenth iteration
@@ -529,3 +530,6 @@ class RB_2D_assimilator(object):
             self.truth.logger.info("Run time: {:.3e} sec".format(total_time))
             self.truth.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
             self.truth.logger.debug("END OF SIMULATION")
+
+            self.truth.merge_results()
+            self.estimator.merge_results()
