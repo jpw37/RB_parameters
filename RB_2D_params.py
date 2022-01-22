@@ -133,9 +133,6 @@ class RB_2D_params(RB_2D_assim):
         self.prev_state = [None] * 2
         self.dt_hist = [None] * 2
 
-        # Slice used to slice off the extra zero padding due to dealias=3/2
-        self.dealias_slice = np.s_[self.problem.parameters['xsize']//4:-self.problem.parameters['xsize']//4, self.problem.parameters['zsize']//4:-self.problem.parameters['zsize']//4]
-
         # Relaxation coefficient
         self.alpha = alpha
 
@@ -360,15 +357,17 @@ class RB_2D_estimator(RB_2D_assimilator):
 
                 # Update the Parameters
                 new = self.estimator.new_params(self.zeta)
-                new_Pr_est, new_Ra_est = new[0], new[1]
+                new_Pr_est, new_Ra_est = new[0][0], new[1][0]
 
                 # Old parameters
                 Pr_est = self.truth.problem.parameters['Pr'] + self.estimator.problem.parameters['Pr_coeff']
-                Ra_est = (self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra'] + self.estimator.problem.parameters['PrRa_coeff'])/old_Pr_est
+                Ra_est = (self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra'] + self.estimator.problem.parameters['PrRa_coeff'])/Pr_est
 
                 # Crank-Nicholson integration for relaxation equation
-                Pr_est = ((1 - 0.5*self.alpha*self.dt)*Pr_est + self.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.alpha*self.dt)
-                Ra_est = ((1 - 0.5*self.alpha*self.dt)*Pr_est + self.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.alpha*self.dt)
+                #print(type(self.dt), type(new_Pr_est))
+                #print(self.dt, new_Pr_est)
+                Pr_est = ((1 - 0.5*self.estimator.alpha*self.dt)*Pr_est + self.estimator.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*self.dt)
+                Ra_est = ((1 - 0.5*self.estimator.alpha*self.dt)*Pr_est + self.estimator.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*self.dt)
 
                 # Set the parameters
                 Pr_coeff = Pr_est - self.truth.problem.parameters['Pr']
@@ -383,6 +382,7 @@ class RB_2D_estimator(RB_2D_assimilator):
                 self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
 
                 # Step the estimator
+                print(self.estimator.solver.evaluator.handlers)
                 self.estimator.solver.step(self.dt)
 
                 # Update steps and dt history
@@ -423,3 +423,6 @@ class RB_2D_estimator(RB_2D_assimilator):
             self.truth.logger.info("Run time: {:.3e} sec".format(total_time))
             self.truth.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
             self.truth.logger.debug("END OF SIMULATION")
+
+            self.truth.merge_results()
+            self.estimator.merge_results()

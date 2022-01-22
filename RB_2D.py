@@ -271,7 +271,7 @@ class RB_2D(BaseSimulator):
         if save:
 
             # Save the temperature measurements in states/ files. Use sim_dt.
-            snaps = self.solver.evaluator.add_file_handler(
+            self.snaps = self.solver.evaluator.add_file_handler(
                                     os.path.join(self.records_dir, "states"),
                                     sim_dt=save, max_writes=5000, mode="append")
                                     # Set save=0.005 or lower for more writes.
@@ -280,12 +280,12 @@ class RB_2D(BaseSimulator):
             if save_tasks is None:
                 save_tasks = ['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz']
 
-            for task in save_tasks: snaps.add_task(task)
+            for task in save_tasks: self.snaps.add_task(task)
 
         # Convergence analysis ------------------------------------------------
         if analysis:
             # Save specific tasks in analysis/ files every few iterations.
-            annals = self.solver.evaluator.add_file_handler(
+            self.annals = self.solver.evaluator.add_file_handler(
                                     os.path.join(self.records_dir, "analysis"),
                                     iter=20, max_writes=73600, mode="append")
 
@@ -303,7 +303,7 @@ class RB_2D(BaseSimulator):
                                   ("sqrt(integ( dx(dx(v))**2 + dz(dz(v))**2 + dx(dz(v))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2")
                                  ]
 
-            for task, name in analysis_tasks: annals.add_task(task, name=name)
+            for task, name in analysis_tasks: self.annals.add_task(task, name=name)
 
         # Control Flow --------------------------------------------------------
         if scheme == de.timesteppers.MCNAB2:
