@@ -77,9 +77,10 @@ class RB_2D_params(RB_2D_assim):
         if return_field:
             return coefficient_field #somehow need to make this so that the field isn't defined every time it is called, and the domain is available...maybe define a field at the initial step and then have that stored in self, then adjusted as necessary?
         else:
-            return np.pad(coefficient_field['g'], pad_width=((self.problem.parameters['xsize']//4,self.problem.parameters['xsize']//4), (self.problem.parameters['zsize']//4,self.problem.parameters['zsize']//4)), mode='constant', constant_values=0.0)
+            coefficient_field.set_scales(3/2)
+            return coefficient_field['g']
 
-    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, **kwargs):
+    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, alpha=1000, **kwargs):
         """
         Sets up the parameters for the dedalus IVP problem. Does not set up the
         equations for the problem yet. Assumes self.problem is already defined.
@@ -130,8 +131,8 @@ class RB_2D_params(RB_2D_assim):
         self.prev_state = [None] * 2
         self.dt_hist = [None] * 2
 
-        # Slice used to slice off the extra zero padding due to dealias=3/2
-        self.dealias_slice = np.s_[self.problem.parameters['xsize']//4:-self.problem.parameters['xsize']//4, self.problem.parameters['zsize']//4:-self.problem.parameters['zsize']//4]
+        # Relaxation coefficient
+        self.alpha = alpha
 
     def new_params(self, zeta):
         """
@@ -142,34 +143,46 @@ class RB_2D_params(RB_2D_assim):
             zeta (dedalus field): The true system state
         """
 
+        zeta.set_scales(3/2)
+
         # Get estimated state and backward time derivative
         zeta_tilde = self.solver.state['zeta']
+        zeta_tilde.set_scales(3/2)
         zeta_t = self.backward_time_derivative()
+        zeta_t.set_scales(3/2)
 
         # set up the alpha_i coefficients
         Ih_laplace_zeta = self.problem.domain.new_field()
+        Ih_laplace_zeta.set_scales(3/2)
         laplace_zeta = (zeta_tilde.differentiate(x=2)+zeta_tilde.differentiate(z=2))
-        Ih_laplace_zeta['g'] = P_N(laplace_zeta, self.N)[self.dealias_slice]
+        Ih_laplace_zeta['g'] = P_N(laplace_zeta, self.N)
 
         # set up the beta_i coefficients
         Ih_temp_x = self.problem.domain.new_field()
-        Ih_temp_x['g'] = P_N(self.solver.state['T'].differentiate(x=1),self.N)[self.dealias_slice]
+        Ih_temp_x.set_scales(3/2)
+        Ih_temp_x['g'] = P_N(self.solver.state['T'].differentiate(x=1),self.N)
 
         # set up the gamma_i coefficients
         remainder = self.problem.domain.new_field()
+        remainder.set_scales(3/2)
         nonlinear_term = self.problem.domain.new_field()
+        nonlinear_term.set_scales(3/2)
         zeta_error = self.problem.domain.new_field()
+        zeta_error.set_scales(3/2)
         Ih_remainder = self.problem.domain.new_field()
+        Ih_remainder.set_scales(3/2)
 
-        zeta_error['g'] = zeta['g'] - zeta_tilde['g'][self.dealias_slice]
+        zeta_error['g'] = zeta['g'] - zeta_tilde['g']
 
         # v = -psi_z, w = psi_x
-        nonlinear_term['g'] = (-self.solver.state['psi'].differentiate(z=1)['g']*zeta_tilde.differentiate(x=1)['g'] + self.solver.state['psi'].differentiate(x=1)['g']*zeta_tilde.differentiate(z=1)['g'])[self.dealias_slice]
+        nonlinear_term['g'] = (-self.solver.state['psi'].differentiate(z=1)['g']*zeta_tilde.differentiate(x=1)['g'] + self.solver.state['psi'].differentiate(x=1)['g']*zeta_tilde.differentiate(z=1)['g'])
         remainder['g'] = nonlinear_term['g'] + zeta_t['g']
         Ih_remainder['g'] = P_N(remainder, self.N)
 
         e1 = self.problem.domain.new_field()
+        e1.set_scales(3/2)
         e2 = self.problem.domain.new_field()
+        e2.set_scales(3/2)
 
         #set e1 to be the projection of the error, guaranteeing exponential decay of the error
         e1['g'] = P_N(zeta_error, self.N)#JPW: check the order of this, should it be zeta_tilde-zeta?
@@ -199,7 +212,7 @@ class RB_2D_params(RB_2D_assim):
         try:
             Pr, PrRa = np.linalg.solve(A,b)
             # Return estimated coefficients
-            return Pr, PrRa/Pr
+            return float(Pr), float(PrRa/Pr)
         except: # if the matrix is singular
             return 0., 0.
 
@@ -230,7 +243,17 @@ class RB_2D_params(RB_2D_assim):
             #Now using these coefficients we compute a 2nd order backward difference
             #approximation to the derivative of the vorticity
             zeta_t = self.problem.domain.new_field()
+
+            # Make sure scales are set
+            zeta_t.set_scales(3/2)
+            self.solver.state['zeta'].set_scales(3/2)
+            self.prev_state[-1].set_scales(3/2)
+            self.prev_state[-2].set_scales(3/2)
+
+            # Calculate
             zeta_t['g'] = c0*self.solver.state['zeta']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
+
+            zeta_t.set_scales(3/2)
 
         return zeta_t
 
@@ -288,10 +311,12 @@ class RB_2D_estimator(RB_2D_assimilator):
 
         # Set initial conditions for estimating system to simply be projections of the initial state of the estimating system
         for variable in self.truth.problem.variables:
-            if self.estimator.solver.state[variable]['g'].shape != self.truth.solver.state[variable]['g'].shape:
-                self.estimator.solver.state[variable]['g'] = P_N(self.truth.solver.state[variable], self.estimator.N)[self.estimator.dealias_slice]
-            else:
-                self.estimator.solver.state[variable]['g'] = P_N(self.truth.solver.state[variable], self.estimator.N)
+
+            # Set scales appropriately
+            self.estimator.solver.state[variable].set_scales(3/2)
+            self.truth.solver.state[variable].set_scales(3/2)
+
+            self.estimator.solver.state[variable]['g'] = P_N(self.truth.solver.state[variable], self.estimator.N)
 
         # Run the simulation
         try:
@@ -312,14 +337,15 @@ class RB_2D_estimator(RB_2D_assimilator):
 
                 # true state
                 self.zeta = self.truth.solver.state['zeta']
-                self.zeta.set_scales(1)
+                self.zeta.set_scales(3/2)
 
                 # assimilating state
                 self.zeta_assim = self.estimator.solver.state['zeta']
-                self.zeta_assim.set_scales(1)
+                self.zeta_assim.set_scales(3/2)
 
                 # Get projection of difference between assimilating state and true state
                 self.dzeta = self.estimator.problem.domain.new_field(name='dzeta')
+                self.dzeta.set_scales(3/2)
                 self.dzeta['g'] = self.zeta_assim['g'] - self.zeta['g']
 
                 # Substitute this projection for the "driving" parameter in the assimilating system
@@ -328,22 +354,39 @@ class RB_2D_estimator(RB_2D_assimilator):
                 self.estimator.problem.parameters["driving"].args = [self.dzeta, self.estimator.N]
 
                 # Update the Parameters
-                new = self.estimator.new_params(self.zeta)
-                Pr_est, Ra_est = new[0], new[1]
-                Pr_coeff = Pr_est - self.truth.problem.parameters['Pr']
-                PrRa_coeff = Pr_est*Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
-
-                print('Pr_coeff: ', Pr_coeff, 'PrRa_coeff', PrRa_coeff)
+                new_Pr_est, new_Ra_est = self.estimator.new_params(self.zeta)
 
                 if self.estimator.solver.iteration == 0:
+
+                    # Use the new estimates
+                    Pr_coeff = new_Pr_est - self.truth.problem.parameters['Pr']
+                    PrRa_coeff = new_Pr_est*new_Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
+
+                    # Set parameters for the first time
                     self.estimator.problem.parameters['Pr_coeff'].original_args = [Pr_coeff]
                     self.estimator.problem.parameters['PrRa_coeff'].original_args = [PrRa_coeff]
-                self.estimator.problem.parameters['Pr_coeff'].args = [Pr_coeff]
-                self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
+                    self.estimator.problem.parameters['Pr_coeff'].args = [Pr_coeff]
+                    self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
+
+                else:
+
+                    # Start with the old estimates
+                    Pr_est = self.truth.problem.parameters['Pr'] + self.estimator.problem.parameters['Pr_coeff'].args[0]
+                    Ra_est = (self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra'] + self.estimator.problem.parameters['PrRa_coeff'].args[0])/Pr_est
+
+                    # Crank-Nicholson integration for relaxation equation
+                    Pr_est = ((1 - 0.5*self.estimator.alpha*dt)*Pr_est + self.estimator.alpha*dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*dt)
+                    Ra_est = ((1 - 0.5*self.estimator.alpha*dt)*Pr_est + self.estimator.alpha*dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*dt)
+
+                    # Calculate parameters which should be used
+                    Pr_coeff = Pr_est - self.truth.problem.parameters['Pr']
+                    PrRa_coeff = Pr_est*Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
+
+                    # Set parameters again
+                    self.estimator.problem.parameters['Pr_coeff'].args = [Pr_coeff]
+                    self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
 
                 # Step the estimator
-                print('dt: ', dt)
-                self.truth.solver.step(dt)
                 self.estimator.solver.step(dt)
 
                 # Update steps and dt history
@@ -384,3 +427,5 @@ class RB_2D_estimator(RB_2D_assimilator):
             self.truth.logger.info("Run time: {:.3e} sec".format(total_time))
             self.truth.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
             self.truth.logger.debug("END OF SIMULATION")
+            self.truth.merge_results()
+            self.estimator.merge_results()
