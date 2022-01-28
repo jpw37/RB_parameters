@@ -98,6 +98,7 @@ class RB_2D_params(RB_2D_assim):
             mu (float): constant on the Fourier projection in the
                 Data Assimilation system.
             N (int): the number of modes to keep in the Fourier projection.
+            alpha (float): Relaxation coefficient
         """
         # Domain parameters
         self.problem.parameters['L'] = L
@@ -175,7 +176,7 @@ class RB_2D_params(RB_2D_assim):
         zeta_error['g'] = zeta['g'] - zeta_tilde['g']
 
         # v = -psi_z, w = psi_x
-        nonlinear_term['g'] = (-self.solver.state['psi'].differentiate(z=1)['g']*zeta_tilde.differentiate(x=1)['g'] + self.solver.state['psi'].differentiate(x=1)['g']*zeta_tilde.differentiate(z=1)['g'])
+        nonlinear_term['g'] = -self.solver.state['psi'].differentiate(z=1)['g']*zeta_tilde.differentiate(x=1)['g'] + self.solver.state['psi'].differentiate(x=1)['g']*zeta_tilde.differentiate(z=1)['g']
         remainder['g'] = nonlinear_term['g'] + zeta_t['g']
         Ih_remainder['g'] = P_N(remainder, self.N)
 
@@ -330,10 +331,10 @@ class RB_2D_estimator(RB_2D_assimilator):
             while self.truth.solver.ok & self.estimator.solver.ok:
 
                 # Use CFL condition to compute time step
-                dt = np.min([self.truth.cfl.compute_dt(), self.estimator.cfl.compute_dt()])
+                self.dt = np.min([self.truth.cfl.compute_dt(), self.estimator.cfl.compute_dt()])
 
                 # Step the truth simulation
-                self.truth.solver.step(dt)
+                self.truth.solver.step(self.dt)
 
                 # true state
                 self.zeta = self.truth.solver.state['zeta']
@@ -391,7 +392,7 @@ class RB_2D_estimator(RB_2D_assimilator):
 
                 # Update steps and dt history
                 self.estimator.prev_state = [self.estimator.prev_state[-1], self.estimator.solver.state['zeta']]
-                self.estimator.dt_hist = [self.estimator.dt_hist[-1], dt]
+                self.estimator.dt_hist = [self.estimator.dt_hist[-1], self.dt]
 
                 # Record properties every tenth iteration
                 if self.truth.solver.iteration % 10 == 0:
@@ -427,5 +428,6 @@ class RB_2D_estimator(RB_2D_assimilator):
             self.truth.logger.info("Run time: {:.3e} sec".format(total_time))
             self.truth.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
             self.truth.logger.debug("END OF SIMULATION")
+            
             self.truth.merge_results()
             self.estimator.merge_results()

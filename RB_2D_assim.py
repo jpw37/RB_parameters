@@ -471,10 +471,10 @@ class RB_2D_assimilator(object):
             while self.truth.solver.ok & self.estimator.solver.ok:
 
                 # Use CFL condition to compute time step
-                dt = np.min([self.truth.cfl.compute_dt(), self.estimator.cfl.compute_dt()])
+                self.dt = np.min([self.truth.cfl.compute_dt(), self.estimator.cfl.compute_dt()])
 
                 # Step the truth simulation
-                self.truth.solver.step(dt)
+                self.truth.solver.step(self.dt)
 
                 # true state
                 self.zeta = self.truth.solver.state['zeta']
@@ -493,6 +493,7 @@ class RB_2D_assimilator(object):
                 self.estimator.problem.parameters["driving"].args = [self.dzeta, self.estimator.N]
 
                 # Step the estimator
+
                 self.estimator.solver.step(dt)
 
                 # Record properties every tenth iteration
@@ -504,12 +505,12 @@ class RB_2D_assimilator(object):
 
                     # Output diagnostic info to log
                     info = "Truth Iteration {:>5d}, Time: {:.7f}, dt: {:.2e}, Max Re = {:f}".format(
-                        self.truth.solver.iteration, self.truth.solver.sim_time, dt, Re)
+                        self.truth.solver.iteration, self.truth.solver.sim_time, self.dt, Re)
                     self.truth.logger.info(info)
 
                     # Output diagnostic info for assimilating system
                     info_assim = "Estimator iteration {:>5d}, Time: {:.7f}, dt: {:.2e}, Max Re = {:f}".format(
-                        self.estimator.solver.iteration, self.estimator.solver.sim_time, dt, Re)
+                        self.estimator.solver.iteration, self.estimator.solver.sim_time, self.dt, Re)
                     self.estimator.logger.info(info_assim)
 
                     if np.isnan(Re):
@@ -529,3 +530,6 @@ class RB_2D_assimilator(object):
             self.truth.logger.info("Run time: {:.3e} sec".format(total_time))
             self.truth.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
             self.truth.logger.debug("END OF SIMULATION")
+
+            self.truth.merge_results()
+            self.estimator.merge_results()
