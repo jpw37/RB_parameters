@@ -79,7 +79,6 @@ class RB_2D_params(RB_2D_assim):
         else:
             coefficient_field.set_scales(3/2)
             return coefficient_field['g']
-            #return np.pad(coefficient_field['g'], pad_width=((self.problem.parameters['xsize']//4,self.problem.parameters['xsize']//4), (self.problem.parameters['zsize']//4,self.problem.parameters['zsize']//4)), mode='constant', constant_values=0.0)
 
     def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, alpha=1000, **kwargs):
         """
@@ -173,7 +172,6 @@ class RB_2D_params(RB_2D_assim):
         zeta_error.set_scales(3/2)
         Ih_remainder = self.problem.domain.new_field()
         Ih_remainder.set_scales(3/2)
-        
 
         zeta_error['g'] = zeta['g'] - zeta_tilde['g']
 
@@ -215,7 +213,7 @@ class RB_2D_params(RB_2D_assim):
         try:
             Pr, PrRa = np.linalg.solve(A,b)
             # Return estimated coefficients
-            return Pr, PrRa/Pr
+            return float(Pr), float(PrRa/Pr)
         except: # if the matrix is singular
             return 0., 0.
 
@@ -340,14 +338,15 @@ class RB_2D_estimator(RB_2D_assimilator):
 
                 # true state
                 self.zeta = self.truth.solver.state['zeta']
-                self.zeta.set_scales(1)
+                self.zeta.set_scales(3/2)
 
                 # assimilating state
                 self.zeta_assim = self.estimator.solver.state['zeta']
-                self.zeta_assim.set_scales(1)
+                self.zeta_assim.set_scales(3/2)
 
                 # Get projection of difference between assimilating state and true state
                 self.dzeta = self.estimator.problem.domain.new_field(name='dzeta')
+                self.dzeta.set_scales(3/2)
                 self.dzeta['g'] = self.zeta_assim['g'] - self.zeta['g']
 
                 # Substitute this projection for the "driving" parameter in the assimilating system
@@ -356,34 +355,40 @@ class RB_2D_estimator(RB_2D_assimilator):
                 self.estimator.problem.parameters["driving"].args = [self.dzeta, self.estimator.N]
 
                 # Update the Parameters
-                new = self.estimator.new_params(self.zeta)
-                new_Pr_est, new_Ra_est = new[0][0], new[1][0]
-
-                # Old parameters
-                Pr_est = self.truth.problem.parameters['Pr'] + self.estimator.problem.parameters['Pr_coeff']
-                Ra_est = (self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra'] + self.estimator.problem.parameters['PrRa_coeff'])/Pr_est
-
-                # Crank-Nicholson integration for relaxation equation
-                #print(type(self.dt), type(new_Pr_est))
-                #print(self.dt, new_Pr_est)
-                Pr_est = ((1 - 0.5*self.estimator.alpha*self.dt)*Pr_est + self.estimator.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*self.dt)
-                Ra_est = ((1 - 0.5*self.estimator.alpha*self.dt)*Pr_est + self.estimator.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*self.dt)
-
-                # Set the parameters
-                Pr_coeff = Pr_est - self.truth.problem.parameters['Pr']
-                PrRa_coeff = Pr_est*Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
-
-                print('Pr_coeff: ', Pr_coeff, 'PrRa_coeff', PrRa_coeff)
+                new_Pr_est, new_Ra_est = self.estimator.new_params(self.zeta)
 
                 if self.estimator.solver.iteration == 0:
+
+                    # Use the new estimates
+                    Pr_coeff = new_Pr_est - self.truth.problem.parameters['Pr']
+                    PrRa_coeff = new_Pr_est*new_Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
+
+                    # Set parameters for the first time
                     self.estimator.problem.parameters['Pr_coeff'].original_args = [Pr_coeff]
                     self.estimator.problem.parameters['PrRa_coeff'].original_args = [PrRa_coeff]
-                self.estimator.problem.parameters['Pr_coeff'].args = [Pr_coeff]
-                self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
+                    self.estimator.problem.parameters['Pr_coeff'].args = [Pr_coeff]
+                    self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
+
+                else:
+
+                    # Start with the old estimates
+                    Pr_est = self.truth.problem.parameters['Pr'] + self.estimator.problem.parameters['Pr_coeff'].args[0]
+                    Ra_est = (self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra'] + self.estimator.problem.parameters['PrRa_coeff'].args[0])/Pr_est
+
+                    # Crank-Nicholson integration for relaxation equation
+                    Pr_est = ((1 - 0.5*self.estimator.alpha*dt)*Pr_est + self.estimator.alpha*dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*dt)
+                    Ra_est = ((1 - 0.5*self.estimator.alpha*dt)*Pr_est + self.estimator.alpha*dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*dt)
+
+                    # Calculate parameters which should be used
+                    Pr_coeff = Pr_est - self.truth.problem.parameters['Pr']
+                    PrRa_coeff = Pr_est*Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
+
+                    # Set parameters again
+                    self.estimator.problem.parameters['Pr_coeff'].args = [Pr_coeff]
+                    self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
 
                 # Step the estimator
-                print(self.estimator.solver.evaluator.handlers)
-                self.estimator.solver.step(self.dt)
+                self.estimator.solver.step(dt)
 
                 # Update steps and dt history
                 self.estimator.prev_state = [self.estimator.prev_state[-1], self.estimator.solver.state['zeta']]
@@ -423,6 +428,6 @@ class RB_2D_estimator(RB_2D_assimilator):
             self.truth.logger.info("Run time: {:.3e} sec".format(total_time))
             self.truth.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
             self.truth.logger.debug("END OF SIMULATION")
-
+            
             self.truth.merge_results()
             self.estimator.merge_results()

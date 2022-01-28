@@ -493,8 +493,8 @@ class RB_2D_assimilator(object):
                 self.estimator.problem.parameters["driving"].args = [self.dzeta, self.estimator.N]
 
                 # Step the estimator
-                print(self.estimator.solver.evaluator.handlers)
-                self.estimator.solver.step(self.dt)
+
+                self.estimator.solver.step(dt)
 
                 # Record properties every tenth iteration
                 if self.truth.solver.iteration % 10 == 0:
