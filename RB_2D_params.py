@@ -80,7 +80,7 @@ class RB_2D_params(RB_2D_assim):
             coefficient_field.set_scales(3/2)
             return coefficient_field['g']
 
-    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, alpha=1000, **kwargs):
+    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, Pr_guess, Ra_guess, alpha=1000, **kwargs):
         """
         Sets up the parameters for the dedalus IVP problem. Does not set up the
         equations for the problem yet. Assumes self.problem is already defined.
@@ -121,6 +121,8 @@ class RB_2D_params(RB_2D_assim):
         # Parameter estimation
         self.problem.parameters['Pr_coeff'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
         self.problem.parameters['PrRa_coeff'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
+        self.Pr_guess = Pr_guess
+        self.Ra_guess = Ra_guess
 
         # Store a little history for estimation of backwards time derivative
         #self.problem.parameters['Pr_coeff'].args = [0.]
@@ -358,16 +360,16 @@ class RB_2D_estimator(RB_2D_assimilator):
                 new_Pr_est, new_Ra_est = self.estimator.new_params(self.zeta)
 
                 if self.estimator.solver.iteration == 0:
-
-                    # Use the new estimates
-                    Pr_coeff = new_Pr_est - self.truth.problem.parameters['Pr']
-                    PrRa_coeff = new_Pr_est*new_Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
+                    
+                    # Use inital guess
+                    Pr_coeff_initial = self.estimator.Pr_guess - self.truth.problem.parameters['Pr']
+                    PrRa_coeff_initial = self.estimator.Pr_guess * self.estimator.Ra_guess - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
 
                     # Set parameters for the first time
-                    self.estimator.problem.parameters['Pr_coeff'].original_args = [Pr_coeff]
-                    self.estimator.problem.parameters['PrRa_coeff'].original_args = [PrRa_coeff]
-                    self.estimator.problem.parameters['Pr_coeff'].args = [Pr_coeff]
-                    self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
+                    self.estimator.problem.parameters['Pr_coeff'].original_args = [Pr_coeff_initial]
+                    self.estimator.problem.parameters['PrRa_coeff'].original_args = [PrRa_coeff_initial]
+                    self.estimator.problem.parameters['Pr_coeff'].args = [Pr_coeff_initial]
+                    self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff_initial]
 
                 else:
 
@@ -376,8 +378,8 @@ class RB_2D_estimator(RB_2D_assimilator):
                     Ra_est = (self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra'] + self.estimator.problem.parameters['PrRa_coeff'].args[0])/Pr_est
 
                     # Crank-Nicholson integration for relaxation equation
-                    Pr_est = ((1 - 0.5*self.estimator.alpha*dt)*Pr_est + self.estimator.alpha*dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*dt)
-                    Ra_est = ((1 - 0.5*self.estimator.alpha*dt)*Pr_est + self.estimator.alpha*dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*dt)
+                    Pr_est = ((1 - 0.5*self.estimator.alpha*self.dt)*Pr_est + self.estimator.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*self.dt)
+                    Ra_est = ((1 - 0.5*self.estimator.alpha*self.dt)*Pr_est + self.estimator.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.estimator.alpha*self.dt)
 
                     # Calculate parameters which should be used
                     Pr_coeff = Pr_est - self.truth.problem.parameters['Pr']
@@ -388,7 +390,7 @@ class RB_2D_estimator(RB_2D_assimilator):
                     self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
 
                 # Step the estimator
-                self.estimator.solver.step(dt)
+                self.estimator.solver.step(self.dt)
 
                 # Update steps and dt history
                 self.estimator.prev_state = [self.estimator.prev_state[-1], self.estimator.solver.state['zeta']]
@@ -403,12 +405,12 @@ class RB_2D_estimator(RB_2D_assimilator):
 
                     # Output diagnostic info to log
                     info = "Truth Iteration {:>5d}, Time: {:.7f}, dt: {:.2e}, Max Re = {:f}".format(
-                        self.truth.solver.iteration, self.truth.solver.sim_time, dt, Re)
+                        self.truth.solver.iteration, self.truth.solver.sim_time, self.dt, Re)
                     self.truth.logger.info(info)
 
                     # Output diagnostic info for assimilating system
                     info_assim = "Estimator iteration {:>5d}, Time: {:.7f}, dt: {:.2e}, Max Re = {:f}".format(
-                        self.estimator.solver.iteration, self.estimator.solver.sim_time, dt, Re)
+                        self.estimator.solver.iteration, self.estimator.solver.sim_time, self.dt, Re)
                     self.estimator.logger.info(info_assim)
 
                     if np.isnan(Re):
