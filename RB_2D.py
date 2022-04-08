@@ -365,6 +365,15 @@ class RB_2D(BaseSimulator):
 
             self.logger.info("Using trivial initial conditions")
 
+        elif initial_conditions == 'zero':
+
+            self.dt = 1e-8
+
+            for task in ["T", "Tz", "psi", "psiz", "zeta", "zetaz"]:
+
+                var = self.solver.state[task]
+                var['g'] = 0
+
         elif isinstance(initial_conditions, str):   # Load data from a file.
             # Resume: load the state of the last (merged) state file.
             resume = initial_conditions == "resume"
@@ -469,7 +478,7 @@ class RB_2D(BaseSimulator):
             self.logger.debug("END OF SIMULATION")
 
         # Merge the results files
-        self.merge_results()
+        #self.merge_results()
 
     def _get_merged_file(self, label):
         """Return the name of the oldest merged (full or partial) h5 file with

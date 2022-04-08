@@ -62,6 +62,7 @@ class RB_2D_assim(RB_2D):
         all parameters, auxiliary equations, and boundary conditions are already
         defined.
         """
+        ### Originally -mu*driving
         self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz)) - dt(zeta) = v*dx(zeta) + w*zetaz - mu*driving")
         self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz)= - v*dx(T) - w*Tz")
 
@@ -385,7 +386,7 @@ class RB_2D_assimilator(object):
         self.estimator = RB_2D_assim(mu=mu, N=N, L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh, BCs=BCs, **kwargs)
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, warmup_time=2, final_sim_time=5, wall_time=1e10, stop_iteration=np.inf,
-                        tight=False, save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None, **kwargs):
+                        tight=False, save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions1=None, initial_conditions2=None, **kwargs):
         """
         scheme (string, de.timestepper): The kind of solver to use. Options are
             RK443 (de.timesteppers.RK443), RK111, RK222, RKSMR, etc.
@@ -426,11 +427,11 @@ class RB_2D_assimilator(object):
         """
         # The system we are gathering low-mode data from
         self.truth.setup_simulation(scheme=scheme, sim_time=warmup_time, wall_time=wall_time, stop_iteration=stop_iteration, tight=tight,
-                           save=save, save_tasks=save_tasks, analysis=analysis, analysis_tasks=analysis_tasks, initial_conditions=initial_conditions, **kwargs)
+                           save=save, save_tasks=save_tasks, analysis=analysis, analysis_tasks=analysis_tasks, initial_conditions=initial_conditions1, **kwargs)
 
         # The assimalating system
         self.estimator.setup_simulation(scheme=scheme, sim_time=final_sim_time, wall_time=wall_time, stop_iteration=stop_iteration, tight=tight,
-                           save=save, save_tasks=save_tasks, analysis=analysis, analysis_tasks=analysis_tasks, initial_conditions=initial_conditions, **kwargs)
+                           save=save, save_tasks=save_tasks, analysis=analysis, analysis_tasks=analysis_tasks, initial_conditions=initial_conditions2, **kwargs)
 
         # Record final_sim_time
         self.final_sim_time = final_sim_time
@@ -451,13 +452,13 @@ class RB_2D_assimilator(object):
         self.truth.solver.stop_sim_time += self.final_sim_time
 
         # Set initial conditions for estimating system to simply be projections of the initial state of the estimating system
-        for variable in self.truth.problem.variables:
+        # for variable in self.truth.problem.variables:
 
-            # Set scales appropriately
-            self.estimator.solver.state[variable].set_scales(3/2)
-            self.truth.solver.state[variable].set_scales(3/2)
+        #     # Set scales appropriately
+        #     self.estimator.solver.state[variable].set_scales(3/2)
+        #     self.truth.solver.state[variable].set_scales(3/2)
 
-            self.estimator.solver.state[variable]['g'] = P_N(self.truth.solver.state[variable], self.estimator.N)
+        #     self.estimator.solver.state[variable]['g'] = P_N(self.truth.solver.state[variable], self.estimator.N)
 
         # Run the simulation
         try:
@@ -494,7 +495,7 @@ class RB_2D_assimilator(object):
 
                 # Step the estimator
 
-                self.estimator.solver.step(dt)
+                self.estimator.solver.step(self.dt)
 
                 # Record properties every tenth iteration
                 if self.truth.solver.iteration % 10 == 0:

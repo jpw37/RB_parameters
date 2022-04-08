@@ -80,7 +80,7 @@ class RB_2D_params(RB_2D_assim):
             coefficient_field.set_scales(3/2)
             return coefficient_field['g']
 
-    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, Pr_guess, Ra_guess, alpha=1000, **kwargs):
+    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, Pr_guess, Ra_guess, alpha=1, **kwargs):
         """
         Sets up the parameters for the dedalus IVP problem. Does not set up the
         equations for the problem yet. Assumes self.problem is already defined.
@@ -137,6 +137,125 @@ class RB_2D_params(RB_2D_assim):
         # Relaxation coefficient
         self.alpha = alpha
 
+    def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=60, stop_iteration=np.inf, tight=False,
+                       save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None, **kwargs):
+        """
+        Load initial conditions, run the simulation, and merge results.
+
+        Parameters:
+            scheme (string, de.timestepper): The kind of solver to use. Options are
+                RK443 (de.timesteppers.RK443), RK111, RK222, RKSMR, etc.
+            sim_time (float): The maximum amount of simulation time allowed
+                (in seconds) before ending the simulation.
+            wall_time (float): The maximum amound of computing time allowed
+                (in seconds) before ending the simulation.
+            stop_iteration (numeric): The maximum amount of iterations allowed
+                before ending the simulation
+
+            #### Not Implemented
+            tight (bool): If True, set a low cadence and min_dt for refined
+                simulation. If False, set a higher cadence and min_dt for a
+                more coarse (but faster) simulation.
+
+            save (float): The number of simulation seconds that pass between
+                saving the state files. Higher save result in smaller data
+                files, but lower numbers result in better animations.
+                Set to 0 to disable saving state files.
+            save_tasks (list of str): which state variables to save. If None,
+                uses ['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz'].
+
+            analysis (bool): Whether or not to track convergence measurements.
+                Disable for faster simulations (less message passing via MPI)
+                when convergence estimates are not needed (i.e. movie only).
+            analysis_tasks (list of 2-tuples of strs): which analysis tasks to
+                perform, given as a list of (task, name) pairs. If None, uses a
+                default list.
+
+            initial_conditions (None, str): determines from what source to
+                draw the initial conditions. Valid options are as follows:
+                - None: use trivial conditions (T_ = 1 - z, T = 1 - z + eps).
+                - 'resume': use the most recent state file in the
+                    records directory (load both model and DA system).
+                - An .h5 filename: load state variables for the model and
+                    reset the data assimilation state variables to zero.
+        """
+
+        # Log a new simulation
+        self.logger.debug("\n")
+        self.logger.debug("NEW SIMULATION")
+
+        # Interpret the scheme, if necessary
+        schemes = {'RK443': de.timesteppers.RK443, 'MCNAB2': de.timesteppers.MCNAB2, 'SBDF3': de.timesteppers.SBDF3}
+        if type(scheme) == str: scheme = schemes[scheme]
+
+        # Build the solver
+        self.solver = self.problem.build_solver(scheme)
+
+        # Set up initial conditions
+        self.setup_ic(initial_conditions)
+
+        # State snapshots -----------------------------------------------------
+        if save:
+
+            # Save the temperature measurements in states/ files. Use sim_dt.
+            self.snaps = self.solver.evaluator.add_file_handler(
+                                    os.path.join(self.records_dir, "states"),
+                                    sim_dt=save, max_writes=5000, mode="append")
+                                    # Set save=0.005 or lower for more writes.
+
+            # Default save tasks
+            if save_tasks is None:
+                save_tasks = ['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz', 'Pr_coeff', 'PrRa_coeff']
+
+            for task in save_tasks: self.snaps.add_task(task)
+
+        # Convergence analysis ------------------------------------------------
+        if analysis:
+            # Save specific tasks in analysis/ files every few iterations.
+            self.annals = self.solver.evaluator.add_file_handler(
+                                    os.path.join(self.records_dir, "analysis"),
+                                    iter=20, max_writes=73600, mode="append")
+
+            # Default analysis tasks
+            if analysis_tasks is None:
+                analysis_tasks = [
+                                  ("1 + integ(w*T , 'x', 'z')/L", "Nu_1"),
+                                  ("integ(dx(T)**2 + Tz**2, 'x', 'z')/L", "Nu_2"),
+                                  ("integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z')", "Nu_3"),
+                                  ("sqrt(integ(T**2, 'x', 'z'))", "T_L2"),
+                                  ("sqrt( integ(dx(T)**2 + dz(T)**2, 'x', 'z'))", "gradT_L2"),
+                                  ("sqrt( integ(v**2 + w**2, 'x', 'z'))", "u_L2"),
+                                  ("sqrt( integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z'))", "gradu_L2"),
+                                  ("sqrt( integ(dx(dx(T))**2 + dx(dz(T))**2 + dz(dz(T))**2, 'x', 'z'))", "T_h2"),
+                                  ("sqrt(integ( dx(dx(v))**2 + dz(dz(v))**2 + dx(dz(v))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2")
+                                 ]
+
+            for task, name in analysis_tasks: self.annals.add_task(task, name=name)
+
+        # Control Flow --------------------------------------------------------
+        if scheme == de.timesteppers.MCNAB2:
+            self.cfl = flow_tools.CFL(self.solver, initial_dt=self.dt, cadence=5, safety=.2,
+                                 max_change=1.4, min_change=0.2,
+                                 max_dt=0.01, min_dt=1e-11)
+        else:
+            self.cfl = flow_tools.CFL(self.solver, initial_dt=self.dt, cadence=10, safety=.5,
+                                 max_change=1.5, min_change=0.5,
+                                 max_dt=0.01,    min_dt=1e-8)
+
+        self.cfl.add_velocities(('v',  'w' ))
+
+        # Flow properties (print during run; not recorded in the records files)
+        self.flow = flow_tools.GlobalFlowProperty(self.solver, cadence=1)
+        self.flow.add_property("sqrt(v **2 + w **2) / Ra", name='Re' )
+
+        # Set solver attributes
+        self.solver.stop_sim_time = sim_time
+        self.solver.stop_wall_time = wall_time
+        self.solver.stop_iteration = stop_iteration
+
+        # Set a flag
+        self.solver_setup = True
+
     def new_params(self, zeta):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
@@ -189,7 +308,7 @@ class RB_2D_params(RB_2D_assim):
 
         #set e1 to be the projection of the error, guaranteeing exponential decay of the error
         e1['g'] = P_N(zeta_error, self.N)#JPW: check the order of this, should it be zeta_tilde-zeta?
-        e2['g'] = Ih_laplace_zeta['g'] #start with this choice...others are possible
+        e2['g'] = Ih_temp_x['g']#Ih_laplace_zeta['g'] #start with this choice...others are possible
         #JPW: use I_h(error) as e_1, then start with something already computed, i.e. laplace operator (probably not nonlinear term...stick with linear differential operator ie don't square anything).  Use modified Gram-Schmidt to force this to be orthogonal to e_1 to give the 2nd direction
 
         # now perform modified Gram-Schmidt on e1 and e2 (no need to normalize I don't think)
@@ -209,15 +328,20 @@ class RB_2D_params(RB_2D_assim):
         # Set up linear system and solve
         A = np.array([[alpha1, beta1], [alpha2, beta2]])
         b = np.array([[gamma1], [gamma2]])
-        print()
-        print('Matrix: ', A, 'Vector: ', b)
-        print()
-        try:
-            Pr, PrRa = np.linalg.solve(A,b)
-            # Return estimated coefficients
-            return float(Pr), float(PrRa/Pr)
-        except: # if the matrix is singular
-            return 0., 0.
+        #print()
+        #print('Matrix: ', A, 'Vector: ', b)
+        #print()
+
+        Pr, PrRa = np.linalg.solve(A,b)
+        return float(Pr), float(PrRa/Pr)
+
+        # try:
+        #     Pr, PrRa = np.linalg.solve(A,b)
+        #     # Return estimated coefficients
+        #     return float(Pr), float(PrRa/Pr)
+        # except: # if the matrix is singular
+        #     print('Matrix is singular')
+        #     return 0., 0.
 
     def backward_time_derivative(self):
         """
@@ -267,7 +391,7 @@ class RB_2D_estimator(RB_2D_assimilator):
     A class to run data assimilation and parameter recovery on the 2D RB system.
     """
 
-    def __init__(self, L=4, xsize=384, zsize=192, Prandtl=1, Rayleigh=1e6, mu =1, N=32, BCs = 'no-slip', **kwargs):
+    def __init__(self, L=4, xsize=384, zsize=192, Prandtl=1, Rayleigh=1e6, mu =1e3, N=32, BCs = 'no-slip', **kwargs):
         """
         Creates an instance of RB_2D representing the "true" system which is being
         measured, and an instance of RB_2D_params representing the nudged system
@@ -297,6 +421,7 @@ class RB_2D_estimator(RB_2D_assimilator):
         # The assimalating system
         self.estimator = RB_2D_params(mu=mu, N=N, L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh, **kwargs)
 
+    
     def run_simulation(self):
         """
         Runs the simulations and performs data assimilation. First puts the "true"
@@ -386,8 +511,20 @@ class RB_2D_estimator(RB_2D_assimilator):
                     PrRa_coeff = Pr_est*Ra_est - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
 
                     # Set parameters again
+                    self.estimator.problem.parameters['Pr_coeff'].original_args = [Pr_coeff]
+                    self.estimator.problem.parameters['PrRa_coeff'].original_args = [PrRa_coeff]
                     self.estimator.problem.parameters['Pr_coeff'].args = [Pr_coeff]
                     self.estimator.problem.parameters['PrRa_coeff'].args = [PrRa_coeff]
+
+                print('new Pr_est: ', new_Pr_est)
+                print('new Ra_est: ', new_Ra_est)
+                
+                if self.estimator.solver.iteration != 0:
+                    print('relaxed Pr_est: ', Pr_est)
+                    print('relaxed Ra_est: ', Ra_est)
+
+                print('Pr_error: ', self.estimator.problem.parameters['Pr_coeff'].args[0])
+                print('PrRa_error: ', self.estimator.problem.parameters['PrRa_coeff'].args[0])
 
                 # Step the estimator
                 self.estimator.solver.step(self.dt)
