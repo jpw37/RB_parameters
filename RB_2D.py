@@ -93,8 +93,6 @@ class RB_2D(BaseSimulator):
                 the system is set up as if Prandtl = infinity.
             Rayleigh (float): measures the amount of heat transfer due to
                 convection, as opposed to conduction.
-            mu (float): constant on the Fourier projection in the
-                Data Assimilation system.
             N (int): the number of modes to keep in the Fourier projection.
             BCs (str): if 'no-slip', use the no-slip BCs u(z=0,1) = 0.
                 If 'free-slip', use the free-slip BCs u_z(z=0,1) = 0.
