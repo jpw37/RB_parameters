@@ -283,6 +283,9 @@ class RB_2D_DA(RB_2D):
                                   ("1 + integ(w*T , 'x', 'z')/L", "Nu_1"),
                                   ("integ(dx(T)**2 + Tz**2, 'x', 'z')/L", "Nu_2"),
                                   ("integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z')", "Nu_3"),
+                                  ("1 + integ(w_*T_ , 'x', 'z')/L", "Nu_1_da"),
+                                  ("integ(dx(T_)**2 + Tz_**2, 'x', 'z')/L", "Nu_2_da"),
+                                  ("integ(dx(v_)**2 + dz(v_)**2 + dx(w_)**2 + dz(w_)**2, 'x', 'z')", "Nu_3_da"),
                                   ("sqrt(integ(T**2, 'x', 'z'))", "T_L2"),
                                   ("sqrt( integ(dx(T)**2 + dz(T)**2, 'x', 'z'))", "gradT_L2"),
                                   ("sqrt( integ(v**2 + w**2, 'x', 'z'))", "u_L2"),
@@ -290,8 +293,12 @@ class RB_2D_DA(RB_2D):
                                   ("sqrt( integ(dx(dx(T))**2 + dx(dz(T))**2 + dz(dz(T))**2, 'x', 'z'))", "T_h2"),
                                   ("sqrt(integ( dx(dx(v))**2 + dz(dz(v))**2 + dx(dz(v))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2"),
                                   ("P_N( zeta )", "Proj"),
-                                  ("sqrt(integ((T-T_)**2, 'x', 'z'))", "T_err_L2"),
-                                  ("sqrt(integ((v-v_)**2 + (w-w_)**2, 'x', 'z'))", "u_err_L2")
+                                  ("sqrt(integ((T-T_)**2, 'x', 'z'))", "T_err"),
+                                  ("sqrt(integ(dx(T-T_)**2+dz(T-T_)**2, 'x', 'z'))", "gradT_err"),
+                                  ("sqrt(integ((v-v_)**2 + (w-w_)**2, 'x', 'z'))", "u_err"),
+                                  ("sqrt(integ(dx(v-v_)**2 + dz(v-v_)**2 + dx(w-w_)**2 + dz(w-w_)**2, 'x', 'z'))", "gradu_err"),
+                                  ("sqrt( integ(dx(dx(T-T_))**2 + dx(dz(T-T_))**2 + dz(dz(T-T_))**2, 'x', 'z'))", "T_h2_err"),
+                                  ("sqrt(integ( dx(dx(v-v_))**2 + dz(dz(v-v_))**2 + dx(dz(v-v_))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2_err")
                                  ]
 
             for task, name in analysis_tasks: self.annals.add_task(task, name=name)
@@ -497,3 +504,247 @@ class RB_2D_DA(RB_2D):
             self.logger.debug("END OF SIMULATION")
 
             self.merge_results()
+
+    def plot_convergence(self, savefig=True):
+        """Plot the six measures of convergence over time."""
+        # self.merge_results()
+        datafile = self._get_merged_file("analysis")
+        self.logger.info("Plotting convergence estimates from '{}'...".format(
+                                                                    datafile))
+        # Gather data from the source file.
+        with h5py.File(datafile, 'r') as data:
+            times = list(data["scales/sim_time"])
+            T_err = data["tasks/T_err"][:,0,0]
+            gradT_err = data["tasks/gradT_err"][:,0,0]
+            u_err = data["tasks/u_err"][:,0,0]
+            gradu_err = data["tasks/gradu_err"][:,0,0]
+            T_h2_err = data["tasks/T_h2_err"][:,0,0]
+            u_h2_err = data["tasks/u_h2_err"][:,0,0]
+            T_L2 = data["tasks/T_L2"][:,0,0]
+            gradT_L2 = data["tasks/gradT_L2"][:,0,0]
+            u_L2 = data["tasks/u_L2"][:,0,0]
+            gradu_L2 = data["tasks/gradu_L2"][:,0,0]
+            T_h2 = data["tasks/T_h2"][:,0,0]
+            u_h2 = data["tasks/u_h2"][:,0,0]
+
+        with plt.style.context(".mplstyle"):
+            # Make subplots and a big plot for an overlay.
+            fig = plt.figure(figsize=(12,6))
+            ax1 = plt.subplot2grid((3,4), (0,0))
+            ax2 = plt.subplot2grid((3,4), (0,1))
+            ax3 = plt.subplot2grid((3,4), (1,0))
+            ax4 = plt.subplot2grid((3,4), (1,1))
+            ax5 = plt.subplot2grid((3,4), (2,0))
+            ax6 = plt.subplot2grid((3,4), (2,1))
+            axbig = plt.subplot2grid((3,4), (0,2), rowspan=3, colspan=2)
+
+            # Plot the data.
+            ax1.semilogy(times, T_err/T_L2[0], 'C0', lw=.5)
+            ax2.semilogy(times, u_err/u_L2[0], 'C1', lw=.5)
+            ax3.semilogy(times, gradT_err/gradT_L2[0], 'C2', lw=.5)
+            ax4.semilogy(times, gradu_err/gradu_L2[0], 'C3', lw=.5)
+            ax5.semilogy(times, T_h2_err/T_h2[0], 'C4', lw=.5)
+            ax6.semilogy(times, u_h2_err/u_h2[0], 'C5', lw=.5)
+            axbig.semilogy(times, T_err/T_L2[0], 'C0', lw=.5,
+                           label=r"$||(\tilde{T} - T)(t)||_{L^2(\Omega)}$")
+            axbig.semilogy(times, u_err/u_L2[0], 'C1', lw=.5,
+                           label=r"$||(\tilde{\mathbf{u}} - \mathbf{u})(t)||"
+                                 r"_{L^2(\Omega)}$")
+            axbig.semilogy(times, gradT_err/gradT_L2[0], 'C2', lw=.5,
+                           label=r"$||(\nabla\tilde{T} - \nabla T)(t)||"
+                                 r"_{L^2(\Omega)}$")
+            axbig.semilogy(times, gradu_err/gradu_L2[0], 'C3', lw=.5,
+                           label=r"$||(\nabla\tilde{\mathbf{u}} - \nabla"
+                                 r"\mathbf{u})(t)||_{L^2(\Omega)}$")
+            axbig.semilogy(times, T_h2_err/T_h2[0], 'C4', lw=.5,
+                           label=r"$||(\tilde{T} - T)(t)||_{H^2(\Omega)}$")
+            axbig.semilogy(times, u_h2_err/u_h2[0], 'C5', lw=.5,
+                           label=r"$||(\tilde{\mathbf{u}} - \mathbf{u})(t)||"
+                                 r"_{H^2(\Omega)}$")
+            axbig.legend(loc="upper right")
+
+            # Set minimal axis and tick labels.
+            for ax in [ax1, ax2, ax3, ax4]:
+                ax.set_xticklabels([])
+            for ax in [ax2, ax4, ax6]:
+                ax.set_yticklabels([])
+            ax5.set_xlabel("Simulation Time", color="white")
+            ax6.set_xlabel("Simulation Time", color="white")
+            axbig.set_xlabel("Simulation Time", color="white")
+            fig.text(0.5, 0.01, r"Simulation Time $t$", ha="center",
+                     fontsize=16)
+            ax1.set_title(r"$||(\tilde{T} - T)(t)||_{L^2(\Omega)}$")
+            ax2.set_title(r"$||(\tilde{\mathbf{u}} - \mathbf{u})(t)||"
+                          r"_{L^2(\Omega)}$")
+            ax3.set_title(r"$||(\nabla\tilde{T} - \nabla T)(t)||"
+                          r"_{L^2(\Omega)}$")
+            ax4.set_title(r"$||(\nabla\tilde{\mathbf{u}} - \nabla"
+                          r"\mathbf{u})(t)||_{L^2(\Omega)}$")
+            ax5.set_title(r"$||(\tilde{T} - T)(t)||_{H^2(\Omega)}$")
+            ax6.set_title(r"$||(\tilde{\mathbf{u}} - \mathbf{u})(t)||"
+                          r"_{H^2(\Omega)}$")
+            axbig.set_title("Overlay")
+
+            # Make the axes uniform and use tight spacing.
+            xlims = axbig.get_xlim()
+            for ax in [ax1, ax2, ax3, ax4, ax5, ax6, axbig]:
+                ax.set_xlim(xlims)
+                ax.set_ylim(1e-13, 1e1)
+            plt.tight_layout()
+
+            # Save or show the figure.
+            if savefig:
+                outfile = os.path.join(self.records_dir, "convergence.png")
+                plt.savefig(outfile, dpi=300, bbox_inches="tight")
+                self.logger.info("\tFigure saved as '{}'".format(outfile))
+            else:
+                plt.show()
+            plt.close()
+
+    def plot_nusselt(self, savefig=True):
+        """Plot the three measures of the Nusselt number over time for the
+        base and DA systems.
+        """
+        # self.merge_results()
+        datafile = self._get_merged_file("analysis")
+        self.logger.info("Plotting Nusselt number from '{}'...".format(
+                                                                    datafile))
+        # Gather data from the source file.
+        times = []
+        nusselt = [[] for _ in range(6)]
+        with h5py.File(datafile, 'r') as data:
+            times = list(data["scales/sim_time"])
+            for i in range(1,4):
+                label = "tasks/Nu_{}".format(i)
+                nusselt[i-1] = data[label][:,0,0]
+                nusselt[i+2] = data[label+"_da"][:,0,0]
+        t, nusselt = np.array(times), np.array(nusselt)
+
+        # Calculate time averages (integrate using Simpson's rule).
+        nuss_avg = np.array([[simps(nu[:n], t[:n]) for n in range(1,len(t)+1)]
+                                                            for nu in nusselt])
+        nuss_avg[:,1:] /= t[1:]
+
+        with plt.style.context(".mplstyle"):
+            # Plot results in 4 subplots (raw nusselt vs time avg, nonDA vs DA)
+            fig = plt.figure(figsize=(12,6))
+            ax1 = plt.subplot2grid((2,4), (0,0))
+            ax2 = plt.subplot2grid((2,4), (0,1), sharey=ax1)
+            ax3 = plt.subplot2grid((2,4), (1,0))
+            ax4 = plt.subplot2grid((2,4), (1,1), sharey=ax3)
+            axbig = plt.subplot2grid((2,4), (0,2), rowspan=2, colspan=2)
+            for i in [0,1,2]:
+                ax1.plot(t[1:], nusselt[i,1:])
+                ax3.plot(t[1:], nuss_avg[i,1:])
+                ax2.plot(t[1:], nusselt[i+3,1:])
+                ax4.plot(t[1:], nuss_avg[i+3,1:])
+            axbig.plot(t[1:], nuss_avg[:3,1:].mean(axis=0),
+                       label='Data ("Truth")')
+            axbig.plot(t[1:], nuss_avg[3:,1:].mean(axis=0),
+                       label="Assimilating System")
+            ax1.set_title("Raw Nusselt", fontsize=8)
+            ax3.set_title("Time Average", fontsize=8)
+            ax2.set_title("DA Raw Nusselt", fontsize=8)
+            ax4.set_title("DA Time Average", fontsize=8)
+            axbig.set_title("Overlay of Mean Time Averages", fontsize=8)
+            axbig.legend(loc="lower right")
+            plt.tight_layout()
+
+            if savefig:
+                outfile = os.path.join(self.records_dir, "nusselt.png")
+                plt.savefig(outfile, dpi=300, bbox_inches="tight")
+                self.logger.info("\tFigure saved as '{}'".format(outfile))
+            else:
+                plt.show()
+            plt.close()
+
+    def animate_temperature(self, max_frames=np.inf, fps=100):
+        """Animate the temperature results of the simulation (model and DA
+        system) and save it to an mp4 file called 'temperature.mp4'.
+        """
+        # self.merge_results()
+        state_file = self._get_merged_file("states")
+        self.logger.info("Creating temperature animation from '{}'...".format(
+                                                                state_file))
+
+        # Set up the figure / movie writer.
+        fig = plt.figure(figsize=(12,6))
+        ax1 = plt.subplot2grid((2,2), (0,0))
+        ax2 = plt.subplot2grid((2,2), (0,1))
+        ax4 = plt.subplot2grid((2,2), (1,0), colspan=2)
+        # fig, [[ax1, ax3], [ax2, ax4]] = plt.subplots(2, 2)
+        ax1.axis("off"); ax2.axis("off") #; ax3.axis("off")
+        ax1.set_title('Data ("Truth")')
+        ax2.set_title("Assimilating System")
+        # ax3.set_title("Projected Temperature Difference", fontsize=8)
+        writer = mplwriters["ffmpeg"](fps=fps) # frames per second, sets speed.
+
+        # Rename the old animation if it exists (it will be deleted later).
+        outfile = os.path.join(self.records_dir, "temperature.mp4")
+        oldfile = os.path.join(self.records_dir, "old_temperature.mp4")
+        if os.path.isfile(outfile):
+            self.logger.info("\tRenaming old animation '{}' -> '{}'".format(
+                                                            outfile, oldfile))
+            os.rename(outfile, oldfile)
+
+        # Write the movie at 200 DPI (resolution).
+        with writer.saving(fig,outfile,200), h5py.File(state_file,'r') as data:
+            print("Extracting data...", end='', flush=True)
+            T = data["tasks/T"]
+            T_ = data["tasks/T_"]
+            # dT = data["tasks/P_N"]
+            times = list(data["scales/sim_time"])
+            assert len(times) == len(T) == len(T_), "mismatched dimensions"
+            print("done")
+
+            # Plot ||T_ - T||_L^infinity.
+            print("Calculating / plotting ||T_ - T||_L^infty(Omega)...",
+                  end='', flush=True)
+            L_inf = np.max(np.abs(T_[:] - T[:]), axis=(1,2))
+            ax4.semilogy(times, L_inf, lw=1)
+            ax4_line = plt.axvline(x=times[0], color='r', lw=.5)
+            _, ylims = ax4_line.get_data()
+            ax4.set_xlim(times[0], times[-1])
+            ax4.set_ylim(1e-11, 1e1)
+            ax4.set_title(r"$||\tilde{T} - T||_{L^\infty(\Omega)} =$" \
+                          + "{:.2e}".format(L_inf[0]))
+            ax4.spines["right"].set_visible(False)
+            ax4.spines["top"].set_visible(False)
+            ax4.set_xlabel(r"Simulation Time $t$")
+            print("done")
+
+            # Set up color maps for each temperature layer.
+            im1 = ax1.imshow( T[0].T, animated=True, cmap="inferno",
+                             vmin=0, vmax=1)
+            im2 = ax2.imshow(T_[0].T, animated=True, cmap="inferno",
+                             vmin=0, vmax=1)
+            # im3 = ax3.imshow(dT[0].T, animated=True, cmap="RdBu_r",
+            #                  vmin=-.05, vmax=.05)
+                             # norm=SymLogNorm(linthresh=1e-10, vmin=-1, vmax=1))
+            # im3 = ax3.imshow(np.log(np.abs(T[0] - T_[0]) + 1e-16).T,
+            #                  animated=True, cmap="viridis") # log difference
+            # fig.colorbar(im3, ax=ax3, fraction=0.023)
+            ax1.invert_yaxis() # Flip the images right-side up.
+            ax2.invert_yaxis()
+            # ax3.invert_yaxis()
+
+            # Save a frame for each layer of task data.
+            for j in tqdm(range(min(T.shape[0], max_frames))):
+                im1.set_array( T[j].T)     # Truth
+                im2.set_array(T_[j].T)     # Approximation
+                # im3.set_array(dT[j].T)     # Difference
+                # im3.set_array(np.log(np.abs(T[j] - T_[j]) + 1e-16).T)
+
+                # Moving line for ||T - T_||_L^infty error plot.
+                t = times[j]
+                ax4_line.set_data([[t,t], ylims])
+                ax4.set_title(r"$||(\tilde{T}-T)(t)||_{L^\infty(\Omega)} =$" \
+                              + "{:.2e}".format(L_inf[j]))
+                writer.grab_frame()
+        self.logger.info("\tAnimation saved as '{}'".format(outfile))
+        plt.close()
+
+        # Delete the old animation.
+        if os.path.isfile(oldfile):
+            self.logger.info("\tDeleting old animation '{}'".format(oldfile))
+            os.remove(oldfile)
