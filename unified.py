@@ -1,84 +1,36 @@
-# RB_2D.py
+# unified.py
 """
-Dedalus script for simulating 2D Rayleigh-Benard convection using the Boussinesq
-approximation.
+New approach to data assimilation and parameter recovery
+for convection: combining all of the equations in a single
+dedalus problem.
 
-Authors: Shane McQuarrie, Jacob Murri, Jared Whitehead
+Author: Jacob Murri
+Creation Date: 2022-05-04
 """
-
-import os
-import re
-import h5py
-import time
+# Utilities
 import numpy as np
-from scipy.integrate import simps
-from sklearn.cluster import KMeans
-from matplotlib import pyplot as plt
-from matplotlib.colors import SymLogNorm
-from matplotlib.animation import writers as mplwriters
-try:
-    from tqdm import tqdm
-except ImportError:
-    print("Recommended: install tqdm (pip install tqdm)")
-    tqdm = lambda x: x
+import os
+import time
 
+# Dedalus imports
 from dedalus import public as de
 from dedalus.extras import flow_tools
 from dedalus.core.operators import GeneralFunction
 
+# Other files
 from base_simulator import BaseSimulator, RANK, SIZE
+from RB_2D import RB_2D, P_N
 
-# Projection Operator ==========================================================
 
-def P_N(F, N, scale=False):
+
+class RB_2D_DA(RB_2D):
     """
-    Calculate the Fourier mode projection of F with N terms.
-    """
-    # Set the c_n to zero wherever n > N (in both axes).
-    X,Y = np.indices(F['c'].shape)
-    F['c'][(X >= N) | (Y >= N)] = 0
-
-    if scale: F.set_scales(1)
-
-    return F['g']
-
-
-def P_N_operator(field):
-    return de.operators.GeneralFunction(field.domain, 'g', P_N, args=(field, 4))
-
-de.operators.parseables["P_N"] = P_N_operator
-
-# Simulation Classes ==========================================================
-
-class RB_2D(BaseSimulator):
-    """
-    Manager for dedalus simulations of the 2D Rayleigh-Benard system.
-
-    Let Psi be defined on [0,L]x[0,1] with coordinates (x,z). Defining
-    u = [v, w] = [-psi_z, psi_x] and zeta = laplace(psi),
-    the Boussinesq equations can be written as follows.
-
-    Pr [Ra T_x + laplace(zeta)] - zeta_t = u.grad(zeta)
-                        laplace(T) - T_t = u.grad(T)
-    subject to
-        u(z=0) = 0 = u(z=1)
-        T(z=0) = 1, T(z=1) = 0
-        u, T periodic in x (use a Fourier basis)
-
-    Variables:
-        u:R2xR -> R2: the fluid velocity vector field.
-        T:R2xR -> R: the fluid temperature.
-        p:R2xR -> R: the pressure.
-        Ra: the Rayleigh number.
-        Pr: the Prandtl number
-
-    If the Prandtl number is infinite, the first equation can be simplified to
-
-    - zeta_t = u.grad(zeta)
+    Manager for dedalus simulations of data assimilation for 2D Rayleigh-
+    Benard convection.
     """
 
-    def __init__(self, L=4, xsize=384, zsize=192, Prandtl=1, Rayleigh=1e6,
-                 BCs="no-slip", **kwargs):
+    def __init__(self, L=4, xsize=384, zsize=192, Prandtl=1, Rayleigh=1e6, mu=1000.,
+                 N=8, BCs="no-slip", **kwargs):
         """
         Set up the systems of equations as a dedalus Initial Value Problem,
         without defining initial conditions.
@@ -88,11 +40,12 @@ class RB_2D(BaseSimulator):
                 therefore [0,L]x[0,1].
             xsize (int): the number of points to discretize in the x direction.
             zsize (int): the number of points to discretize in the z direction.
-            Prandtl (None or float): the ratio of momentum diffusivity to
-                thermal diffusivity of the fluid. If None (default), then
-                the system is set up as if Prandtl = infinity.
+            Prandtl (float): the ratio of momentum diffusivity to
+                thermal diffusivity of the fluid
             Rayleigh (float): measures the amount of heat transfer due to
                 convection, as opposed to conduction.
+            mu (float): constant on the Fourier projection in the
+                Data Assimilation system.
             N (int): the number of modes to keep in the Fourier projection.
             BCs (str): if 'no-slip', use the no-slip BCs u(z=0,1) = 0.
                 If 'free-slip', use the free-slip BCs u_z(z=0,1) = 0.
@@ -108,10 +61,11 @@ class RB_2D(BaseSimulator):
         domain = de.Domain([x_basis, z_basis], grid_dtype=np.float64)
 
         # Initialize the problem as an IVP
-        self.problem = de.IVP(domain, variables=['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz'])
+        self.varlist = ['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz', 'T_', 'Tz_', 'psi_', 'psiz_', 'zeta_', 'zetaz_']
+        self.problem = de.IVP(domain, variables=self.varlist)
 
         # Set up remaining parameters
-        self.setup_params(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh, **kwargs)
+        self.setup_params(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh, mu=mu, N=N, **kwargs)
         self.logger.info("Parameters set up")
 
         # Initialize auxiliary equations and BCs
@@ -119,13 +73,13 @@ class RB_2D(BaseSimulator):
         self.logger.info("Auxiliary equations and BCs set up")
 
         # Initialize evolution equations
-        self.setup_evolution(**kwargs)
+        self.setup_evolution()
         self.logger.info("Evolution equations constructed")
 
         # Save system parameters in JSON format.
         if RANK == 0: self._save_params()
 
-    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, **kwargs):
+    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, **kwargs):
         """
         Sets up the parameters for the dedalus IVP problem. Does not set up the
         equations for the problem yet. Assumes self.problem is already defined.
@@ -151,6 +105,15 @@ class RB_2D(BaseSimulator):
         self.problem.parameters['Ra'] = Rayleigh
         self.problem.parameters['Pr'] = Prandtl
 
+        # Driving parameters
+        self.problem.parameters['mu'] = mu
+        self.mu = mu
+        self.problem.parameters['N'] = N
+        self.N = N
+
+        # GeneralFunction for driving
+        self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
+
     def setup_auxiliary(self, BCs, **kwargs):
         """
         Assuming that the dedalus IVP problem is contained in self.problem, defines
@@ -166,14 +129,20 @@ class RB_2D(BaseSimulator):
         # Stream function substitutions: u = [v, w] = [-psi_z, psi_x]
         self.problem.substitutions['v']  = "-psiz" # or -dz()
         self.problem.substitutions['w']  =  "dx(psi)"
+        self.problem.substitutions['v_']  = "-psiz_" # or -dz()
+        self.problem.substitutions['w_']  =  "dx(psi_)"
 
         # zeta = laplace(psi)
         self.problem.add_equation("zeta  - dx(dx(psi))  - dz(psiz)  = 0")
+        self.problem.add_equation("zeta_  - dx(dx(psi_))  - dz(psiz_)  = 0")
 
         # Relate higher-order z derivatives (b/c Chebyshev).
         self.problem.add_equation("psiz  - dz(psi)  = 0")
         self.problem.add_equation("zetaz  - dz(zeta)  = 0")
         self.problem.add_equation("Tz  - dz(T)  = 0")
+        self.problem.add_equation("psiz_  - dz(psi_)  = 0")
+        self.problem.add_equation("zetaz_  - dz(zeta_)  = 0")
+        self.problem.add_equation("Tz_  - dz(T_)  = 0")
 
         # Boundary Conditions -------------------------------------------------
 
@@ -183,36 +152,48 @@ class RB_2D(BaseSimulator):
         # Temperature heating from 'left' (bottom), cooling from 'right' (top).
         self.problem.add_bc("left(T)  = 1")          # T(z=0) = 1
         self.problem.add_bc("right(T)  = 0")         # T(z=1) = 0
+        self.problem.add_bc("left(T_)  = 1")          # T(z=0) = 1
+        self.problem.add_bc("right(T_)  = 0")
 
         # Velocity field boundary conditions: no-slip or free-slip.
         # w(z=1) = w(z=0) = 0 (part of no-slip and free-slip)
         self.problem.add_bc("left(psi)  = 0")
         self.problem.add_bc("right(psi)  = 0")
+        self.problem.add_bc("left(psi_)  = 0")
+        self.problem.add_bc("right(psi_)  = 0")
 
         if BCs == "no-slip":
 
             # u(z=0) = 0 --> v(z=0) = 0 = w(z=0)
             self.problem.add_bc("left(psiz)  = 0")
+            self.problem.add_bc("left(psiz_)  = 0")
 
             # u(z=1) = 0 --> v(z=1) = 0 = w(z=1)
             self.problem.add_bc("right(psiz)  = 0")
+            self.problem.add_bc("right(psiz_)  = 0")
 
         elif BCs == "free-slip":
             # u'(z=0) = 0 --> v'(z=0) = 0 = w(z=0)
             self.problem.add_bc("left(dz(psiz))  = 0")
+            self.problem.add_bc("left(dz(psiz_))  = 0")
 
             # u'(z=1) = 0 --> v'(z=1) = 0 = w(z=1)
             self.problem.add_bc("right(dz(psiz))  = 0")
+            self.problem.add_bc("right(dz(psiz_))  = 0")
 
-    def setup_evolution(self, **kwargs):
+    def setup_evolution(self):
         """
-        Sets up the main Boussinesq evolution equations (without nudging), assuming
-        all parameters, auxiliary equations, and boundary conditions are already
-        defined.
+        Set up the Boussinesq evolution equation and nudging equation for
+        data assimilation.
         """
+
+        # Boussinesq evolution equations
         self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz))  - dt(zeta) = v*dx(zeta) + w*zetaz")
         self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz) = - v*dx(T) - w*Tz")
 
+        # Nudging equations
+        self.problem.add_equation("Pr*(Ra*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving")
+        self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=60, stop_iteration=np.inf, tight=False,
                        save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None, **kwargs):
@@ -281,9 +262,9 @@ class RB_2D(BaseSimulator):
                                     # Set save=0.005 or lower for more writes.
 
             # Default save tasks
-            if save_tasks is None:
-                save_tasks = ['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz']
+            if save_tasks is None: save_tasks = self.varlist
 
+            # Add save tasks to list
             for task in save_tasks: self.snaps.add_task(task)
 
         # Convergence analysis ------------------------------------------------
@@ -302,13 +283,22 @@ class RB_2D(BaseSimulator):
                                   ("1 + integ(w*T , 'x', 'z')/L", "Nu_1"),
                                   ("integ(dx(T)**2 + Tz**2, 'x', 'z')/L", "Nu_2"),
                                   ("integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z')", "Nu_3"),
+                                  ("1 + integ(w_*T_ , 'x', 'z')/L", "Nu_1_da"),
+                                  ("integ(dx(T_)**2 + Tz_**2, 'x', 'z')/L", "Nu_2_da"),
+                                  ("integ(dx(v_)**2 + dz(v_)**2 + dx(w_)**2 + dz(w_)**2, 'x', 'z')", "Nu_3_da"),
                                   ("sqrt(integ(T**2, 'x', 'z'))", "T_L2"),
                                   ("sqrt( integ(dx(T)**2 + dz(T)**2, 'x', 'z'))", "gradT_L2"),
                                   ("sqrt( integ(v**2 + w**2, 'x', 'z'))", "u_L2"),
                                   ("sqrt( integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z'))", "gradu_L2"),
                                   ("sqrt( integ(dx(dx(T))**2 + dx(dz(T))**2 + dz(dz(T))**2, 'x', 'z'))", "T_h2"),
                                   ("sqrt(integ( dx(dx(v))**2 + dz(dz(v))**2 + dx(dz(v))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2"),
-                                  ("P_N( zeta )", "Proj")
+                                  ("P_N( zeta )", "Proj"),
+                                  ("sqrt(integ((T-T_)**2, 'x', 'z'))", "T_err"),
+                                  ("sqrt(integ(dx(T-T_)**2+dz(T-T_)**2, 'x', 'z'))", "gradT_err"),
+                                  ("sqrt(integ((v-v_)**2 + (w-w_)**2, 'x', 'z'))", "u_err"),
+                                  ("sqrt(integ(dx(v-v_)**2 + dz(v-v_)**2 + dx(w-w_)**2 + dz(w-w_)**2, 'x', 'z'))", "gradu_err"),
+                                  ("sqrt( integ(dx(dx(T-T_))**2 + dx(dz(T-T_))**2 + dz(dz(T-T_))**2, 'x', 'z'))", "T_h2_err"),
+                                  ("sqrt(integ( dx(dx(v-v_))**2 + dz(dz(v-v_))**2 + dx(dz(v-v_))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2_err")
                                  ]
 
             for task, name in analysis_tasks: self.annals.add_task(task, name=name)
@@ -336,7 +326,6 @@ class RB_2D(BaseSimulator):
 
         # Set a flag
         self.solver_setup = True
-
 
     def setup_ic(self, initial_conditions):
         """
@@ -373,14 +362,25 @@ class RB_2D(BaseSimulator):
 
             self.logger.info("Using trivial initial conditions")
 
-        elif initial_conditions == 'zero':
+        elif initial_conditions == 'conductive':
 
+            # Initial time step
             self.dt = 1e-8
 
-            for task in ["T", "Tz", "psi", "psiz", "zeta", "zetaz"]:
+            # Grids
+            x, z = self.problem.domain.grids(scales=1)
+
+            for task in self.varlist:
 
                 var = self.solver.state[task]
-                var['g'] = 0
+
+                if task[0] == 'T':
+
+                    var['g'] = 1 - z
+
+                else:
+
+                    var['g'] = 0
 
         elif isinstance(initial_conditions, str):   # Load data from a file.
             # Resume: load the state of the last (merged) state file.
@@ -434,6 +434,7 @@ class RB_2D(BaseSimulator):
         #                                                        G, 4, True)
         #    solver.state['T_'].differentiate('z', out=solver.state['Tz_'])
 
+
     def run_simulation(self):
         """
         Runs the simulation defined in self.setup_simulation, and then merges
@@ -454,6 +455,23 @@ class RB_2D(BaseSimulator):
 
                 # Use CFL condition to compute time step
                 self.dt = self.cfl.compute_dt()
+
+                # Get projection information for Nudging
+                # true state
+                self.zeta = self.solver.state['zeta']
+                self.zeta.set_scales(1)
+
+                # assimilating state
+                self.zeta_ = self.solver.state['zeta_']
+                self.zeta_.set_scales(1)
+
+                # Get projection of difference between assimilating state and true state
+                self.dzeta = self.problem.domain.new_field(name='dzeta')
+                self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
+
+                # Substitute this projection for the "driving" parameter in the assimilating system
+                if self.solver.iteration == 0: self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
+                self.problem.parameters["driving"].args = [self.dzeta, self.N]
 
                 # Step
                 self.solver.step(self.dt)
@@ -485,53 +503,7 @@ class RB_2D(BaseSimulator):
             self.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
             self.logger.debug("END OF SIMULATION")
 
-        # Merge the results files
-        #self.merge_results()
-
-    def _get_merged_file(self, label):
-        """Return the name of the oldest merged (full or partial) h5 file with
-        the specified label.
-        """
-        if label not in {"states", "analysis"}:
-            raise ValueError("label must be 'states' or 'analysis'")
-        out = self.get_files(label)
-        if out[0].endswith("{}.h5".format(label)):
-            return out[0]
-        return out[-1]
-
-    @staticmethod
-    def _get_fully_merged_state_file(records_dir):
-        """Return the name of the fully merged h5 state file, without doing
-        any file merges if the file does not exist.
-
-        Parameters:
-            records_dir (str): The base folder containing the simulation files.
-
-        Raises:
-            NotADirectoryError: if the states/ subdirectory does not exist.
-            FileNotFoundError: if the states/states.h5 file does not exist.
-        """
-        subdir = os.path.join(records_dir, "states")
-        if not os.path.isdir(subdir):
-            raise NotADirectoryError(subdir)
-
-        target = os.path.join(records_dir, "states", "states.h5")
-        if not os.path.isfile(target):
-            raise FileNotFoundError(target)
-
-        return target
-
-    def merge_results(self, force=False):
-        """Merge the different process state and analysis files together."""
-        for label in ["analysis", "states"]:
-            # Check that the folder exists and is nonempty.
-            folder = os.path.join(self.records_dir, label)
-            if os.path.isdir(folder) and os.listdir(folder):
-                # Call the parent merge function.
-                BaseSimulator.merge_results(self, label, True, force=force)
-            else:
-                # Inform the user that merge files were not found.
-                self.logger.info("No {} files to merge".format(label))
+            self.merge_results()
 
     def plot_convergence(self, savefig=True):
         """Plot the six measures of convergence over time."""
@@ -542,8 +514,12 @@ class RB_2D(BaseSimulator):
         # Gather data from the source file.
         with h5py.File(datafile, 'r') as data:
             times = list(data["scales/sim_time"])
-
-            # Only use the tasks computed for a single RB_2D run
+            T_err = data["tasks/T_err"][:,0,0]
+            gradT_err = data["tasks/gradT_err"][:,0,0]
+            u_err = data["tasks/u_err"][:,0,0]
+            gradu_err = data["tasks/gradu_err"][:,0,0]
+            T_h2_err = data["tasks/T_h2_err"][:,0,0]
+            u_h2_err = data["tasks/u_h2_err"][:,0,0]
             T_L2 = data["tasks/T_L2"][:,0,0]
             gradT_L2 = data["tasks/gradT_L2"][:,0,0]
             u_L2 = data["tasks/u_L2"][:,0,0]
@@ -551,7 +527,7 @@ class RB_2D(BaseSimulator):
             T_h2 = data["tasks/T_h2"][:,0,0]
             u_h2 = data["tasks/u_h2"][:,0,0]
 
-        for i in range(1): # with plt.style.context(".mplstyle"):
+        with plt.style.context(".mplstyle"):
             # Make subplots and a big plot for an overlay.
             fig = plt.figure(figsize=(12,6))
             ax1 = plt.subplot2grid((3,4), (0,0))
@@ -563,27 +539,28 @@ class RB_2D(BaseSimulator):
             axbig = plt.subplot2grid((3,4), (0,2), rowspan=3, colspan=2)
 
             # Plot the data.
-            ax1.plot(times, T_L2[0], 'C0', lw=.5)
-            ax2.plot(times, u_L2[0], 'C1', lw=.5)
-            ax3.plot(times, gradT_L2[0], 'C2', lw=.5)
-            ax4.plot(times, gradu_L2[0], 'C3', lw=.5)
-            ax5.plot(times, T_h2[0], 'C4', lw=.5)
-            ax6.plot(times, u_h2[0], 'C5', lw=.5)
-            axbig = plt.subplot2grid((3,4), (0,2), rowspan=3, colspan=2)
-
-            # Plot the data.
-            axbig.plot(times, T_L2[0], 'C0', lw=.5,
-                           label=r"$||T(t)||_{L^2(\Omega)}$")
-            axbig.plot(times, u_L2[0], 'C1', lw=.5,
-                           label=r"$||u(t)||_{L^2(\Omega)}$")
-            axbig.plot(times, gradT_L2[0], 'C2', lw=.5,
-                           label=r"$||\nabla T(t)||{L^2(\Omega)}$")
-            axbig.plot(times, gradu_L2[0], 'C3', lw=.5,
-                           label=r"$||\nabla\mathbf{u}(t)||_{L^2(\Omega)}$")
-            axbig.plot(times, T_h2[0], 'C4', lw=.5,
-                           label=r"$||T(t)||_{H^2(\Omega)}$")
-            axbig.plt(times, u_h2[0], 'C5', lw=.5,
-                           label=r"$||\mathbf{u}(t)||_{H^2(\Omega)}$")
+            ax1.semilogy(times, T_err/T_L2[0], 'C0', lw=.5)
+            ax2.semilogy(times, u_err/u_L2[0], 'C1', lw=.5)
+            ax3.semilogy(times, gradT_err/gradT_L2[0], 'C2', lw=.5)
+            ax4.semilogy(times, gradu_err/gradu_L2[0], 'C3', lw=.5)
+            ax5.semilogy(times, T_h2_err/T_h2[0], 'C4', lw=.5)
+            ax6.semilogy(times, u_h2_err/u_h2[0], 'C5', lw=.5)
+            axbig.semilogy(times, T_err/T_L2[0], 'C0', lw=.5,
+                           label=r"$||(\tilde{T} - T)(t)||_{L^2(\Omega)}$")
+            axbig.semilogy(times, u_err/u_L2[0], 'C1', lw=.5,
+                           label=r"$||(\tilde{\mathbf{u}} - \mathbf{u})(t)||"
+                                 r"_{L^2(\Omega)}$")
+            axbig.semilogy(times, gradT_err/gradT_L2[0], 'C2', lw=.5,
+                           label=r"$||(\nabla\tilde{T} - \nabla T)(t)||"
+                                 r"_{L^2(\Omega)}$")
+            axbig.semilogy(times, gradu_err/gradu_L2[0], 'C3', lw=.5,
+                           label=r"$||(\nabla\tilde{\mathbf{u}} - \nabla"
+                                 r"\mathbf{u})(t)||_{L^2(\Omega)}$")
+            axbig.semilogy(times, T_h2_err/T_h2[0], 'C4', lw=.5,
+                           label=r"$||(\tilde{T} - T)(t)||_{H^2(\Omega)}$")
+            axbig.semilogy(times, u_h2_err/u_h2[0], 'C5', lw=.5,
+                           label=r"$||(\tilde{\mathbf{u}} - \mathbf{u})(t)||"
+                                 r"_{H^2(\Omega)}$")
             axbig.legend(loc="upper right")
 
             # Set minimal axis and tick labels.
@@ -596,12 +573,16 @@ class RB_2D(BaseSimulator):
             axbig.set_xlabel("Simulation Time", color="white")
             fig.text(0.5, 0.01, r"Simulation Time $t$", ha="center",
                      fontsize=16)
-            ax1.set_title(r"$||T(t)||_{L^2(\Omega)}$")
-            ax2.set_title(r"$||\mathbf{u}(t)||_{L^2(\Omega)}$")
-            ax3.set_title(r"$||\nabla T(t)||_{L^2(\Omega)}$")
-            ax4.set_title(r"$||\nabla\mathbf{u}(t)||_{L^2(\Omega)}$")
-            ax5.set_title(r"$||T(t)||_{H^2(\Omega)}$")
-            ax6.set_title(r"$||\mathbf{u}(t)||_{H^2(\Omega)}$")
+            ax1.set_title(r"$||(\tilde{T} - T)(t)||_{L^2(\Omega)}$")
+            ax2.set_title(r"$||(\tilde{\mathbf{u}} - \mathbf{u})(t)||"
+                          r"_{L^2(\Omega)}$")
+            ax3.set_title(r"$||(\nabla\tilde{T} - \nabla T)(t)||"
+                          r"_{L^2(\Omega)}$")
+            ax4.set_title(r"$||(\nabla\tilde{\mathbf{u}} - \nabla"
+                          r"\mathbf{u})(t)||_{L^2(\Omega)}$")
+            ax5.set_title(r"$||(\tilde{T} - T)(t)||_{H^2(\Omega)}$")
+            ax6.set_title(r"$||(\tilde{\mathbf{u}} - \mathbf{u})(t)||"
+                          r"_{H^2(\Omega)}$")
             axbig.set_title("Overlay")
 
             # Make the axes uniform and use tight spacing.
@@ -630,12 +611,13 @@ class RB_2D(BaseSimulator):
                                                                     datafile))
         # Gather data from the source file.
         times = []
-        nusselt = [[] for _ in range(3)]
+        nusselt = [[] for _ in range(6)]
         with h5py.File(datafile, 'r') as data:
             times = list(data["scales/sim_time"])
             for i in range(1,4):
                 label = "tasks/Nu_{}".format(i)
                 nusselt[i-1] = data[label][:,0,0]
+                nusselt[i+2] = data[label+"_da"][:,0,0]
         t, nusselt = np.array(times), np.array(nusselt)
 
         # Calculate time averages (integrate using Simpson's rule).
@@ -643,20 +625,27 @@ class RB_2D(BaseSimulator):
                                                             for nu in nusselt])
         nuss_avg[:,1:] /= t[1:]
 
-        for i in range(1): # with plt.style.context(".mplstyle"):
+        with plt.style.context(".mplstyle"):
             # Plot results in 4 subplots (raw nusselt vs time avg, nonDA vs DA)
-            fig = plt.figure(figsize=(12,6), dpi=300)
-            ax1 = plt.subplot2grid((2,3), (0,0))
-            ax3 = plt.subplot2grid((2,3), (1,0))
-            axbig = plt.subplot2grid((2,4), (0,1), rowspan=2, colspan=2)
+            fig = plt.figure(figsize=(12,6))
+            ax1 = plt.subplot2grid((2,4), (0,0))
+            ax2 = plt.subplot2grid((2,4), (0,1), sharey=ax1)
+            ax3 = plt.subplot2grid((2,4), (1,0))
+            ax4 = plt.subplot2grid((2,4), (1,1), sharey=ax3)
+            axbig = plt.subplot2grid((2,4), (0,2), rowspan=2, colspan=2)
             for i in [0,1,2]:
                 ax1.plot(t[1:], nusselt[i,1:])
                 ax3.plot(t[1:], nuss_avg[i,1:])
-
+                ax2.plot(t[1:], nusselt[i+3,1:])
+                ax4.plot(t[1:], nuss_avg[i+3,1:])
             axbig.plot(t[1:], nuss_avg[:3,1:].mean(axis=0),
                        label='Data ("Truth")')
+            axbig.plot(t[1:], nuss_avg[3:,1:].mean(axis=0),
+                       label="Assimilating System")
             ax1.set_title("Raw Nusselt", fontsize=8)
             ax3.set_title("Time Average", fontsize=8)
+            ax2.set_title("DA Raw Nusselt", fontsize=8)
+            ax4.set_title("DA Time Average", fontsize=8)
             axbig.set_title("Overlay of Mean Time Averages", fontsize=8)
             axbig.legend(loc="lower right")
             plt.tight_layout()
@@ -680,10 +669,13 @@ class RB_2D(BaseSimulator):
 
         # Set up the figure / movie writer.
         fig = plt.figure(figsize=(12,6))
-        ax1 = plt.subplot2grid((2,2), (0,0), colspan=2, rowspan=2)
+        ax1 = plt.subplot2grid((2,2), (0,0))
+        ax2 = plt.subplot2grid((2,2), (0,1))
+        ax4 = plt.subplot2grid((2,2), (1,0), colspan=2)
         # fig, [[ax1, ax3], [ax2, ax4]] = plt.subplots(2, 2)
-        ax1.axis("off"); #ax2.axis("off") #; ax3.axis("off")
+        ax1.axis("off"); ax2.axis("off") #; ax3.axis("off")
         ax1.set_title('Data ("Truth")')
+        ax2.set_title("Assimilating System")
         # ax3.set_title("Projected Temperature Difference", fontsize=8)
         writer = mplwriters["ffmpeg"](fps=fps) # frames per second, sets speed.
 
@@ -699,12 +691,32 @@ class RB_2D(BaseSimulator):
         with writer.saving(fig,outfile,200), h5py.File(state_file,'r') as data:
             print("Extracting data...", end='', flush=True)
             T = data["tasks/T"]
+            T_ = data["tasks/T_"]
             # dT = data["tasks/P_N"]
             times = list(data["scales/sim_time"])
+            assert len(times) == len(T) == len(T_), "mismatched dimensions"
+            print("done")
+
+            # Plot ||T_ - T||_L^infinity.
+            print("Calculating / plotting ||T_ - T||_L^infty(Omega)...",
+                  end='', flush=True)
+            L_inf = np.max(np.abs(T_[:] - T[:]), axis=(1,2))
+            ax4.semilogy(times, L_inf, lw=1)
+            ax4_line = plt.axvline(x=times[0], color='r', lw=.5)
+            _, ylims = ax4_line.get_data()
+            ax4.set_xlim(times[0], times[-1])
+            ax4.set_ylim(1e-11, 1e1)
+            ax4.set_title(r"$||\tilde{T} - T||_{L^\infty(\Omega)} =$" \
+                          + "{:.2e}".format(L_inf[0]))
+            ax4.spines["right"].set_visible(False)
+            ax4.spines["top"].set_visible(False)
+            ax4.set_xlabel(r"Simulation Time $t$")
             print("done")
 
             # Set up color maps for each temperature layer.
             im1 = ax1.imshow( T[0].T, animated=True, cmap="inferno",
+                             vmin=0, vmax=1)
+            im2 = ax2.imshow(T_[0].T, animated=True, cmap="inferno",
                              vmin=0, vmax=1)
             # im3 = ax3.imshow(dT[0].T, animated=True, cmap="RdBu_r",
             #                  vmin=-.05, vmax=.05)
@@ -713,17 +725,21 @@ class RB_2D(BaseSimulator):
             #                  animated=True, cmap="viridis") # log difference
             # fig.colorbar(im3, ax=ax3, fraction=0.023)
             ax1.invert_yaxis() # Flip the images right-side up.
+            ax2.invert_yaxis()
             # ax3.invert_yaxis()
 
             # Save a frame for each layer of task data.
             for j in tqdm(range(min(T.shape[0], max_frames))):
                 im1.set_array( T[j].T)     # Truth
-
+                im2.set_array(T_[j].T)     # Approximation
                 # im3.set_array(dT[j].T)     # Difference
                 # im3.set_array(np.log(np.abs(T[j] - T_[j]) + 1e-16).T)
 
                 # Moving line for ||T - T_||_L^infty error plot.
                 t = times[j]
+                ax4_line.set_data([[t,t], ylims])
+                ax4.set_title(r"$||(\tilde{T}-T)(t)||_{L^\infty(\Omega)} =$" \
+                              + "{:.2e}".format(L_inf[j]))
                 writer.grab_frame()
         self.logger.info("\tAnimation saved as '{}'".format(outfile))
         plt.close()
