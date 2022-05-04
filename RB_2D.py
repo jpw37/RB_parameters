@@ -42,6 +42,12 @@ def P_N(F, N, scale=False):
 
     return F['g']
 
+
+def P_N_operator(field):
+    return de.operators.GeneralFunction(field.domain, 'g', P_N, args=(field, 4))
+
+de.operators.parseables["P_N"] = P_N_operator
+
 # Simulation Classes ==========================================================
 
 class RB_2D(BaseSimulator):
@@ -287,7 +293,10 @@ class RB_2D(BaseSimulator):
             # Save specific tasks in analysis/ files every few iterations.
             self.annals = self.solver.evaluator.add_file_handler(
                                     os.path.join(self.records_dir, "analysis"),
-                                    iter=20, max_writes=73600, mode="append")
+                                    sim_dt=save, max_writes=73600, mode="append") # iters = 20
+
+
+
 
             # Default analysis tasks
             if analysis_tasks is None:
@@ -300,7 +309,8 @@ class RB_2D(BaseSimulator):
                                   ("sqrt( integ(v**2 + w**2, 'x', 'z'))", "u_L2"),
                                   ("sqrt( integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z'))", "gradu_L2"),
                                   ("sqrt( integ(dx(dx(T))**2 + dx(dz(T))**2 + dz(dz(T))**2, 'x', 'z'))", "T_h2"),
-                                  ("sqrt(integ( dx(dx(v))**2 + dz(dz(v))**2 + dx(dz(v))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2")
+                                  ("sqrt(integ( dx(dx(v))**2 + dz(dz(v))**2 + dx(dz(v))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2"),
+                                  ("P_N( zeta )", "Proj")
                                  ]
 
             for task, name in analysis_tasks: self.annals.add_task(task, name=name)
