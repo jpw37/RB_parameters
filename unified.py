@@ -38,24 +38,24 @@ class RB_2D_DA(RB_2D):
     Benard convection.
     """
 
-    def __init__(self, L=4, xsize=384, zsize=192, Prandtl=1, Rayleigh=1e6, mu=1000.,
-                 N=8, BCs="no-slip", **kwargs):
+    def __init__(self, L=4., xsize=384, zsize=192, Prandtl=1., Rayleigh=1e6,
+                 mu=1000., N=8, BCs="no-slip", **kwargs):
         """
         Set up the systems of equations as a dedalus Initial Value Problem,
         without defining initial conditions.
 
         Parameters:
             L (float): the length of the x domain. In x and z, the domain is
-                therefore [0,L]x[0,1].
-            xsize (int): the number of points to discretize in the x direction.
-            zsize (int): the number of points to discretize in the z direction.
+                therefore [0,L]x[0,1]
+            xsize (int): the number of points to discretize in the x direction
+            zsize (int): the number of points to discretize in the z direction
             Prandtl (float): the ratio of momentum diffusivity to
                 thermal diffusivity of the fluid
             Rayleigh (float): measures the amount of heat transfer due to
-                convection, as opposed to conduction.
+                convection, as opposed to conduction
             mu (float): constant on the Fourier projection in the
-                Data Assimilation system.
-            N (int): the number of modes to keep in the Fourier projection.
+                Data Assimilation system
+            N (int): the number of modes to keep in the Fourier projection
             BCs (str): if 'no-slip', use the no-slip BCs u(z=0,1) = 0.
                 If 'free-slip', use the free-slip BCs u_z(z=0,1) = 0.
 
@@ -70,11 +70,13 @@ class RB_2D_DA(RB_2D):
         domain = de.Domain([x_basis, z_basis], grid_dtype=np.float64)
 
         # Initialize the problem as an IVP
-        self.varlist = ['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz', 'T_', 'Tz_', 'psi_', 'psiz_', 'zeta_', 'zetaz_']
+        self.varlist = ['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz', 'T_', 'Tz_',
+                        'psi_', 'psiz_', 'zeta_', 'zetaz_']
         self.problem = de.IVP(domain, variables=self.varlist)
 
         # Set up remaining parameters
-        self.setup_params(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh, mu=mu, N=N, **kwargs)
+        self.setup_params(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl,
+                          Rayleigh=Rayleigh, mu=mu, N=N, **kwargs)
         self.logger.info("Parameters set up")
 
         # Initialize auxiliary equations and BCs
@@ -95,9 +97,9 @@ class RB_2D_DA(RB_2D):
 
         Parameters:
             L (float): the length of the x domain. In x and z, the domain is
-                therefore [0,L]x[0,1].
-            xsize (int): the number of points to discretize in the x direction.
-            zsize (int): the number of points to discretize in the z direction.
+                therefore [0,L]x[0,1]
+            xsize (int): the number of points to discretize in the x direction
+            zsize (int): the number of points to discretize in the z direction
             Prandtl (None or float): the ratio of momentum diffusivity to
                 thermal diffusivity of the fluid. If None (default), then
                 the system is set up as if Prandtl = infinity.
@@ -122,6 +124,23 @@ class RB_2D_DA(RB_2D):
 
         # GeneralFunction for driving
         self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
+
+        # Get projection information for Nudging
+        # true state
+        self.zeta = self.solver.state['zeta']
+        self.zeta.set_scales(1)
+
+        # assimilating state
+        self.zeta_ = self.solver.state['zeta_']
+        self.zeta_.set_scales(1)
+
+        # Get projection of difference between assimilating state and true state
+        self.dzeta = self.problem.domain.new_field(name='dzeta')
+        self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
+
+        # Substitute this projection for the "driving" parameter in the assimilating system
+        self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
+        self.problem.parameters["driving"].args = [self.dzeta, self.N]
 
     def setup_auxiliary(self, BCs, **kwargs):
         """
@@ -204,7 +223,7 @@ class RB_2D_DA(RB_2D):
         self.problem.add_equation("Pr*(Ra*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving")
         self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
 
-    def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=60, stop_iteration=np.inf, tight=False,
+    def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=np.inf, stop_iteration=np.inf, tight=False,
                        save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None, **kwargs):
         """
         Load initial conditions, run the simulation, and merge results.
@@ -472,24 +491,6 @@ class RB_2D_DA(RB_2D):
 
                 # Use CFL condition to compute time step
                 self.dt = self.cfl.compute_dt()
-
-                # Get projection information for Nudging
-                # true state
-                self.zeta = self.solver.state['zeta']
-                self.zeta.set_scales(1)
-
-                # assimilating state
-                self.zeta_ = self.solver.state['zeta_']
-                self.zeta_.set_scales(1)
-
-                # Get projection of difference between assimilating state and true state
-                self.dzeta = self.problem.domain.new_field(name='dzeta')
-                self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
-
-                # Substitute this projection for the "driving" parameter in the assimilating system
-                if self.solver.iteration == 0: 
-                    self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
-                    self.problem.parameters["driving"].args = [self.dzeta, self.N]
 
                 # Step
                 self.solver.step(self.dt)
