@@ -8,9 +8,18 @@ Author: Jacob Murri
 Creation Date: 2022-05-04
 """
 # Utilities
+from matplotlib import pyplot as plt
 import numpy as np
 import os
 import time
+import h5py
+from scipy.integrate import simps
+from matplotlib.animation import writers as mplwriters
+try:
+    from tqdm import tqdm
+except ImportError:
+    print("Recommended: install tqdm (pip install tqdm)")
+    tqdm = lambda x: x
 
 # Dedalus imports
 from dedalus import public as de
@@ -362,10 +371,14 @@ class RB_2D_DA(RB_2D):
 
             self.logger.info("Using trivial initial conditions")
 
-        elif initial_conditions == 'conductive':
+        elif initial_conditions == 'test':
 
             # Initial time step
             self.dt = 1e-8
+
+            # "Trivial" conditions.
+            eps = 1e-4
+            k = 3.117
 
             # Grids
             x, z = self.problem.domain.grids(scales=1)
@@ -374,9 +387,13 @@ class RB_2D_DA(RB_2D):
 
                 var = self.solver.state[task]
 
-                if task[0] == 'T':
+                if task == 'T':
 
-                    var['g'] = 1 - z
+                    var['g'] = 1 - z + 0.5*np.sin(k*x)*np.sin(2*np.pi*z)
+
+                elif task == 'T_':
+
+                    var['g'] = 1 - z + 0.1*np.sin(k*x)*np.sin(2*np.pi*z)
 
                 else:
 
@@ -470,8 +487,9 @@ class RB_2D_DA(RB_2D):
                 self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
 
                 # Substitute this projection for the "driving" parameter in the assimilating system
-                if self.solver.iteration == 0: self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
-                self.problem.parameters["driving"].args = [self.dzeta, self.N]
+                if self.solver.iteration == 0: 
+                    self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
+                    self.problem.parameters["driving"].args = [self.dzeta, self.N]
 
                 # Step
                 self.solver.step(self.dt)
