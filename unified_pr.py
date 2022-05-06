@@ -1,10 +1,10 @@
-# unified.py
+# unified_pr.py
 """
-New approach to data assimilation for convection: combining the Boussinesq and
-nudging equations in a single dedalus problem.
+New approach to data assimilation and parameter recovery for convection:
+combining the Boussinesq and nudging equations in a single dedalus problem.
 
 Author: Jacob Murri
-Creation Date: 2022-05-04
+Creation Date: 2022-05-05
 """
 # Utilities
 from matplotlib import pyplot as plt
@@ -29,17 +29,18 @@ from dedalus.core.operators import GeneralFunction
 # Other files
 from base_simulator import BaseSimulator, RANK, SIZE
 from RB_2D import RB_2D, P_N
+from unified import RB_2D_DA
 
-
-
-class RB_2D_DA(RB_2D):
+class RB_2D_PR(RB_2D_DA):
     """
-    Manager for dedalus simulations of data assimilation for 2D Rayleigh-
-    Benard convection.
+    Manager for dedalus simulations of data assimilation and parameter recovery
+    for 2D Rayleigh-Benard convection.
     """
 
     def __init__(self, L=4., xsize=384, zsize=192, Prandtl=1., Rayleigh=1e6,
-                 mu=1000., N=8, BCs="no-slip", **kwargs):
+                 mu=1000., N=8, BCs="no-slip", Pr_guess=1., Ra_guess=1e6,
+                 alpha=1., PrRa_RHS=False, nudge_T=False,
+                 zeta_projection=P_N, T_projection=None, **kwargs):
         """
         Set up the systems of equations as a dedalus Initial Value Problem,
         without defining initial conditions.
@@ -58,6 +59,11 @@ class RB_2D_DA(RB_2D):
             N (int): the number of modes to keep in the Fourier projection
             BCs (str): if 'no-slip', use the no-slip BCs u(z=0,1) = 0.
                 If 'free-slip', use the free-slip BCs u_z(z=0,1) = 0.
+            PrRa_RHS (bool): if true, puts the Pr and Ra terms on the right hand
+                side of the evolution equations. If not, formulates the estimated
+                Pr and Ra as true value + error (with true on LHS, error on RHS)
+            nudge_T (bool): if true, use nudging on the temperature variable as
+                well (not implemented yet)
 
         """
         # Create an instance of the BaseSimulator class
@@ -76,7 +82,8 @@ class RB_2D_DA(RB_2D):
 
         # Set up remaining parameters
         self.setup_params(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl,
-                          Rayleigh=Rayleigh, mu=mu, N=N, **kwargs)
+                          Rayleigh=Rayleigh, mu=mu, N=N, Pr_guess=Pr_guess,
+                          Ra_guess=Ra_guess, alpha=alpha, **kwargs)
         self.logger.info("Parameters set up")
 
         # Initialize auxiliary equations and BCs
@@ -84,13 +91,14 @@ class RB_2D_DA(RB_2D):
         self.logger.info("Auxiliary equations and BCs set up")
 
         # Initialize evolution equations
-        self.setup_evolution()
+        self.setup_evolution(PrRa_RHS=PrRa_RHS, nudge_T=nudge_T)
         self.logger.info("Evolution equations constructed")
 
         # Save system parameters in JSON format.
         if RANK == 0: self._save_params()
 
-    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, **kwargs):
+    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, Pr_guess,
+                     Ra_guess, alpha, **kwargs):
         """
         Sets up the parameters for the dedalus IVP problem. Does not set up the
         equations for the problem yet. Assumes self.problem is already defined.
@@ -125,74 +133,20 @@ class RB_2D_DA(RB_2D):
         # GeneralFunction for driving
         self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
 
-    def setup_auxiliary(self, BCs, **kwargs):
-        """
-        Assuming that the dedalus IVP problem is contained in self.problem, defines
-        boundary conditions and auxiliary (non-time-dependent) equations for the problem.
+        # Parameter estimation
+        self.problem.parameters['Pr_'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
+        self.problem.parameters['PrRa_'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
+        self.Pr_guess = Pr_guess
+        self.Ra_guess = Ra_guess
 
-        Parameters:
-            BCs (str): if 'no-slip', use the no-slip BCs u(z=0,1) = 0.
-                If 'free-slip', use the free-slip BCs u_z(z=0,1) = 0.
-        """
+        # Need to initialize the previous 2 states and corresponding time steps
+        self.prev_state = [None] * 2
+        self.dt_hist = [None] * 2
 
-        # Add Boussinesq equations --------------------------------------------
+        # Relaxation coefficient
+        self.alpha = alpha
 
-        # Stream function substitutions: u = [v, w] = [-psi_z, psi_x]
-        self.problem.substitutions['v']  = "-psiz" # or -dz()
-        self.problem.substitutions['w']  =  "dx(psi)"
-        self.problem.substitutions['v_']  = "-psiz_" # or -dz()
-        self.problem.substitutions['w_']  =  "dx(psi_)"
-
-        # zeta = laplace(psi)
-        self.problem.add_equation("zeta  - dx(dx(psi))  - dz(psiz)  = 0")
-        self.problem.add_equation("zeta_  - dx(dx(psi_))  - dz(psiz_)  = 0")
-
-        # Relate higher-order z derivatives (b/c Chebyshev).
-        self.problem.add_equation("psiz  - dz(psi)  = 0")
-        self.problem.add_equation("zetaz  - dz(zeta)  = 0")
-        self.problem.add_equation("Tz  - dz(T)  = 0")
-        self.problem.add_equation("psiz_  - dz(psi_)  = 0")
-        self.problem.add_equation("zetaz_  - dz(zeta_)  = 0")
-        self.problem.add_equation("Tz_  - dz(T_)  = 0")
-
-        # Boundary Conditions -------------------------------------------------
-
-        # Other boundary conditions not implemented yet
-        assert BCs in ['no-slip', 'free-slip'], "'BCs' must be 'no-slip' or 'free-slip'"
-
-        # Temperature heating from 'left' (bottom), cooling from 'right' (top).
-        self.problem.add_bc("left(T)  = 1")          # T(z=0) = 1
-        self.problem.add_bc("right(T)  = 0")         # T(z=1) = 0
-        self.problem.add_bc("left(T_)  = 1")          # T(z=0) = 1
-        self.problem.add_bc("right(T_)  = 0")
-
-        # Velocity field boundary conditions: no-slip or free-slip.
-        # w(z=1) = w(z=0) = 0 (part of no-slip and free-slip)
-        self.problem.add_bc("left(psi)  = 0")
-        self.problem.add_bc("right(psi)  = 0")
-        self.problem.add_bc("left(psi_)  = 0")
-        self.problem.add_bc("right(psi_)  = 0")
-
-        if BCs == "no-slip":
-
-            # u(z=0) = 0 --> v(z=0) = 0 = w(z=0)
-            self.problem.add_bc("left(psiz)  = 0")
-            self.problem.add_bc("left(psiz_)  = 0")
-
-            # u(z=1) = 0 --> v(z=1) = 0 = w(z=1)
-            self.problem.add_bc("right(psiz)  = 0")
-            self.problem.add_bc("right(psiz_)  = 0")
-
-        elif BCs == "free-slip":
-            # u'(z=0) = 0 --> v'(z=0) = 0 = w(z=0)
-            self.problem.add_bc("left(dz(psiz))  = 0")
-            self.problem.add_bc("left(dz(psiz_))  = 0")
-
-            # u'(z=1) = 0 --> v'(z=1) = 0 = w(z=1)
-            self.problem.add_bc("right(dz(psiz))  = 0")
-            self.problem.add_bc("right(dz(psiz_))  = 0")
-
-    def setup_evolution(self):
+    def setup_evolution(self, PrRa_RHS, nudge_T):
         """
         Set up the Boussinesq evolution equation and nudging equation for
         data assimilation.
@@ -203,8 +157,151 @@ class RB_2D_DA(RB_2D):
         self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz) = - v*dx(T) - w*Tz")
 
         # Nudging equations
-        self.problem.add_equation("Pr*(Ra*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving")
-        self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
+        if PrRa_RHS:
+            self.problem.add_equation("dt(zeta_) = -v_*dx(zeta_) - w_*zetaz_  + PrRa_*dx(T_) + Pr_*(dx(dx(zeta_)) + dz(zetaz_)) + mu*driving ")
+        else:
+            self.problem.add_equation("Pr*(Ra*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - PrRa_*dx(T_) - Pr_*(dx(dx(zeta_)) + dz(zetaz_))")
+
+        if nudge_T:
+            pass
+        else:
+            self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
+
+    def const_val(self, value, return_field=False):
+        """
+        Assuming that the problem is already defined, create a new field on the
+        problem's domain with constant value given by the argument value.
+
+        Parameters:
+            value (numeric): the value which will be given to the new field.
+        """
+        coefficient_field = self.problem.domain.new_field()
+        coefficient_field['g'] = value
+        if return_field:
+            return coefficient_field #somehow need to make this so that the field isn't defined every time it is called, and the domain is available...maybe define a field at the initial step and then have that stored in self, then adjusted as necessary?
+        else:
+            coefficient_field.set_scales(3/2)
+            return coefficient_field['g']
+
+    def new_params(self):
+        """
+        Method to estimate the parameters at each step, devised by B. Pachev and
+        J. Whitehead.
+
+        Parameters:
+            zeta (dedalus field): The true system state
+        """
+
+        # Set scales
+        self.solver.state['zeta'].set_scales(3/2)
+        self.solver.state['zeta_'].set_scales(3/2)
+
+        # Projections of true state
+        proj_zeta = P_N(self.solver.state['zeta'], self.N)
+        proj_T = P_N(self.solver.state['T'], self.N)
+
+        # Get backward time derivative
+        zeta_t = self.backward_time_derivative()
+        zeta_t.set_scales(3/2)
+
+        # set up the alpha_i coefficients
+        Ih_laplace_zeta_ = self.problem.domain.new_field()
+        Ih_laplace_zeta_.set_scales(3/2)
+        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
+
+        # set up the beta_i coefficients
+        Ih_temp_x_ = self.problem.domain.new_field()
+        Ih_temp_x_.set_scales(3/2)
+        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
+
+        # set up the gamma_i coefficients
+        Ih_remainder_ = self.problem.domain.new_field()
+        Ih_remainder_.set_scales(3/2)
+        # v = -psi_z, w = psi_x
+        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
+
+        # Set e1 to be the projection of the error, guaranteeing exponential decay of the error
+        e1 = self.problem.domain.new_field()
+        e1.set_scales(3/2)
+        e1['g'] = proj_zeta - P_N(self.solver.state['zeta_'], self.N)
+
+        # Normalize
+        e1['g'] /= de.operators.integrate(e1**2, 'x', 'z')['g'][0,0]
+
+        # Many choices are possible for e2
+        e2 = self.problem.domain.new_field()
+        e2.set_scales(3/2)
+        e2['g'] = Ih_temp_x_['g']
+        # Another possibility (to guarantee decay of error in H1)
+        # e2['g'] = e1.differentiate(z=2)['g'] + e1.differentiate(x=2)['g']
+
+        #Perform modified Gram-Schmidt on e1 and e2 (no need to normalize)
+        c = de.operators.integrate(e1*e2,'x','z')['g']*e1['g']
+        e2['g'] = e2['g'] - c
+
+        # Normalize
+        e2['g'] /= de.operators.integrate(e2**2, 'x', 'z')['g'][0,0]
+
+        # Now e1 and e2 should be orthogonal. Calculate the coefficients
+        alpha1 = de.operators.integrate(e1*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
+        alpha2 = de.operators.integrate(e2*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
+
+        beta1 = de.operators.integrate(e1*Ih_temp_x_, 'x', 'z')['g'][0,0]
+        beta2 = de.operators.integrate(e2*Ih_temp_x_, 'x', 'z')['g'][0,0]
+
+        gamma1 = -self.mu * de.operators.integrate(e1**2, 'x', 'z')['g'][0,0] + de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
+        gamma2 = de.operators.integrate(e2*Ih_remainder_, 'x', 'z')['g'][0,0]
+
+        # Set up linear system and solve
+        A = np.array([[alpha1, beta1], [alpha2, beta2]])
+        b = np.array([[gamma1], [gamma2]])
+        print()
+        print('Matrix: ', A, 'Vector: ', b)
+        print()
+
+        Pr, PrRa = np.linalg.solve(A,b)
+        return float(Pr), float(PrRa/Pr)
+
+    def backward_time_derivative(self):
+        """
+        Calculuate the time derivative of the observed vorticity based off of
+        the estimating system. Derivation of the derivative approximation is made
+        in the main document.
+        """
+
+        ### NOTE: Use projection of true state.
+
+        if None in self.dt_hist:
+            # There may be a better way to do this.  Right now zeta_t=0 for the first 2 time steps
+            zeta_t = self.const_val(0., return_field=True)
+
+        else:
+            dt = self.dt_hist
+            dt_ratio = dt[-1]/dt[-2]
+            dt_diff = dt[-1]-dt[-2]
+            dt_sum = dt[-1]+dt[-2]
+
+            # Now to set up the coefficients of the finite differencing
+            c0 = - (dt_diff*(dt[-1]**2 + dt_sum**2))/(dt[-1]*dt[-2])
+            c1 = (dt_diff*dt_sum**2)/(dt[-1]*dt[-2])
+            c2 = dt_ratio*dt_diff
+
+            #Now using these coefficients we compute a 2nd order backward difference
+            #approximation to the derivative of the vorticity
+            zeta_t = self.problem.domain.new_field()
+
+            # Make sure scales are set
+            zeta_t.set_scales(3/2)
+            self.solver.state['zeta'].set_scales(3/2)
+            self.prev_state[-1].set_scales(3/2)
+            self.prev_state[-2].set_scales(3/2)
+
+            # Calculate
+            zeta_t['g'] = c0*self.solver.state['zeta']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
+
+            zeta_t.set_scales(3/2)
+
+        return zeta_t
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=np.inf, stop_iteration=np.inf, tight=False,
                        save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None, **kwargs):
@@ -309,7 +406,9 @@ class RB_2D_DA(RB_2D):
                                   ("sqrt(integ((v-v_)**2 + (w-w_)**2, 'x', 'z'))", "u_err"),
                                   ("sqrt(integ(dx(v-v_)**2 + dz(v-v_)**2 + dx(w-w_)**2 + dz(w-w_)**2, 'x', 'z'))", "gradu_err"),
                                   ("sqrt( integ(dx(dx(T-T_))**2 + dx(dz(T-T_))**2 + dz(dz(T-T_))**2, 'x', 'z'))", "T_h2_err"),
-                                  ("sqrt(integ( dx(dx(v-v_))**2 + dz(dz(v-v_))**2 + dx(dz(v-v_))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2_err")
+                                  ("sqrt(integ( dx(dx(v-v_))**2 + dz(dz(v-v_))**2 + dx(dz(v-v_))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2_err"),
+                                  ("Pr + Pr_", 'Pr_est'),
+                                  ("Ra + (PrRa_/Pr)", 'Ra_est')
                                  ]
 
             for task, name in analysis_tasks: self.annals.add_task(task, name=name)
@@ -330,16 +429,11 @@ class RB_2D_DA(RB_2D):
         self.flow = flow_tools.GlobalFlowProperty(self.solver, cadence=1)
         self.flow.add_property("sqrt(v **2 + w **2) / Ra", name='Re' )
 
-        # Get projection information for Nudging
-        # true state
+        # Define args for driving parameter
         self.zeta = self.solver.state['zeta']
         self.zeta.set_scales(1)
-
-        # assimilating state
         self.zeta_ = self.solver.state['zeta_']
         self.zeta_.set_scales(1)
-
-        # Get projection of difference between assimilating state and true state
         self.dzeta = self.problem.domain.new_field(name='dzeta')
         self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
 
@@ -491,6 +585,46 @@ class RB_2D_DA(RB_2D):
 
                 # Use CFL condition to compute time step
                 self.dt = self.cfl.compute_dt()
+
+                # Update parameters: different on first iteration than subsequent iterations
+                if self.solver.iteration == 0:
+
+                    # Use inital guess
+                    Pr_ = self.Pr_guess - self.problem.parameters['Pr']
+                    PrRa_ = self.Pr_guess * self.Ra_guess - self.problem.parameters['Pr']*self.problem.parameters['Ra']
+
+                else:
+
+                    # Start with the old estimates
+                    Pr_est = self.problem.parameters['Pr'] + self.problem.parameters['Pr_'].args[0]
+                    Ra_est = (self.problem.parameters['Pr']*self.problem.parameters['Ra'] + self.problem.parameters['PrRa_'].args[0])/Pr_est
+
+                    # Get update
+                    new_Pr_est, new_Ra_est = self.new_params()
+
+                    # Crank-Nicholson integration for relaxation
+                    Pr_est = ((1 - 0.5*self.alpha*self.dt)*Pr_est + self.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.alpha*self.dt)
+                    Ra_est = ((1 - 0.5*self.alpha*self.dt)*Ra_est + self.alpha*self.dt*new_Ra_est)/(1 + 0.5*self.alpha*self.dt)
+
+                    # Calculate parameters which should be used
+                    Pr_ = Pr_est - self.problem.parameters['Pr']
+                    PrRa_ = Pr_est*Ra_est - self.problem.parameters['Pr']*self.problem.parameters['Ra']
+
+                    print('new Pr_est: ', new_Pr_est)
+                    print('new Ra_est: ', new_Ra_est)
+
+                    print('relaxed Pr_est: ', Pr_est)
+                    print('relaxed Ra_est: ', Ra_est)
+
+
+                # Set parameters
+                self.problem.parameters['Pr_'].original_args = [Pr_]
+                self.problem.parameters['PrRa_'].original_args = [PrRa_]
+                self.problem.parameters['Pr_'].args = [Pr_]
+                self.problem.parameters['PrRa_'].args = [PrRa_]
+
+                print('Pr_error: ', self.problem.parameters['Pr_'].args[0])
+                print('PrRa_error: ', self.problem.parameters['PrRa_'].args[0])
 
                 # Step
                 self.solver.step(self.dt)
