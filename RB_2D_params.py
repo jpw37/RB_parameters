@@ -421,7 +421,7 @@ class RB_2D_estimator(RB_2D_assimilator):
         # The assimalating system
         self.estimator = RB_2D_params(mu=mu, N=N, L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh, **kwargs)
 
-    
+
     def run_simulation(self):
         """
         Runs the simulations and performs data assimilation. First puts the "true"
@@ -485,7 +485,7 @@ class RB_2D_estimator(RB_2D_assimilator):
                 new_Pr_est, new_Ra_est = self.estimator.new_params(self.zeta)
 
                 if self.estimator.solver.iteration == 0:
-                    
+
                     # Use inital guess
                     Pr_coeff_initial = self.estimator.Pr_guess - self.truth.problem.parameters['Pr']
                     PrRa_coeff_initial = self.estimator.Pr_guess * self.estimator.Ra_guess - self.truth.problem.parameters['Pr']*self.truth.problem.parameters['Ra']
@@ -518,7 +518,7 @@ class RB_2D_estimator(RB_2D_assimilator):
 
                 print('new Pr_est: ', new_Pr_est)
                 print('new Ra_est: ', new_Ra_est)
-                
+
                 if self.estimator.solver.iteration != 0:
                     print('relaxed Pr_est: ', Pr_est)
                     print('relaxed Ra_est: ', Ra_est)
@@ -567,6 +567,6 @@ class RB_2D_estimator(RB_2D_assimilator):
             self.truth.logger.info("Run time: {:.3e} sec".format(total_time))
             self.truth.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
             self.truth.logger.debug("END OF SIMULATION")
-            
+
             self.truth.merge_results()
             self.estimator.merge_results()
