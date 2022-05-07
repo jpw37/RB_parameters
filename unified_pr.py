@@ -31,6 +31,17 @@ from base_simulator import BaseSimulator, RANK, SIZE
 from RB_2D import RB_2D, P_N
 from unified import RB_2D_DA
 
+def fdcoeffs_v1(stencil, d):
+
+    assert len(stencil) > d
+
+    # Create linear system
+    A = np.vander(stencil, increasing=True).T
+    b = np.zeros(len(stencil))
+    b[d] = factorial(d)
+
+    return np.linalg.solve(A, b)
+
 class RB_2D_PR(RB_2D_DA):
     """
     Manager for dedalus simulations of data assimilation and parameter recovery
@@ -295,6 +306,8 @@ class RB_2D_PR(RB_2D_DA):
             self.solver.state['zeta'].set_scales(3/2)
             self.prev_state[-1].set_scales(3/2)
             self.prev_state[-2].set_scales(3/2)
+
+            c2, c1, c0 = fdcoeffs_v1(np.cumsum(self.dt_hist) - np.sum(self.dt_hist), 1)
 
             # Calculate
             zeta_t['g'] = c0*self.solver.state['zeta']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
