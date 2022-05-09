@@ -32,7 +32,15 @@ from RB_2D import RB_2D, P_N
 from unified import RB_2D_DA
 
 def fdcoeffs_v1(stencil, d):
+    """
+    Given stencil points x_0 < x_1 < ... < x_n, returns coefficients
+    [c_0, c_1, ..., c_n] for which \sum_{i=0}^n c_i f(x_i) approximates
+    f^(d)(0), the dth-order derivative of f at zero, to n-d+1 th order.
 
+    Parameters:
+        stencil (ndarray): array of stencil points
+        d (int): order of derivative to approximate
+    """
     assert len(stencil) > d
 
     # Create linear system
@@ -40,6 +48,7 @@ def fdcoeffs_v1(stencil, d):
     b = np.zeros(len(stencil))
     b[d] = factorial(d)
 
+    # solve linear system
     return np.linalg.solve(A, b)
 
 class RB_2D_PR(RB_2D_DA):
