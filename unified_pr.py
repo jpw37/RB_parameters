@@ -13,6 +13,7 @@ import os
 import time
 import h5py
 from scipy.integrate import simps
+from scipy.special import factorial
 from matplotlib.animation import writers as mplwriters
 try:
     from tqdm import tqdm
@@ -246,12 +247,13 @@ class RB_2D_PR(RB_2D_DA):
         e1['g'] = proj_zeta - P_N(self.solver.state['zeta_'], self.N)
 
         # Normalize
-        e1['g'] /= de.operators.integrate(e1**2, 'x', 'z')['g'][0,0]
+        e1['g'] /= np.sqrt(de.operators.integrate(e1**2, 'x', 'z')['g'][0,0])
 
         # Many choices are possible for e2
         e2 = self.problem.domain.new_field()
         e2.set_scales(3/2)
         e2['g'] = Ih_temp_x_['g']
+
         # Another possibility (to guarantee decay of error in H1)
         # e2['g'] = e1.differentiate(z=2)['g'] + e1.differentiate(x=2)['g']
 
@@ -260,7 +262,7 @@ class RB_2D_PR(RB_2D_DA):
         e2['g'] = e2['g'] - c
 
         # Normalize
-        e2['g'] /= de.operators.integrate(e2**2, 'x', 'z')['g'][0,0]
+        e2['g'] /= np.sqrt(de.operators.integrate(e2**2, 'x', 'z')['g'][0,0])
 
         # Now e1 and e2 should be orthogonal. Calculate the coefficients
         alpha1 = de.operators.integrate(e1*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
@@ -269,7 +271,7 @@ class RB_2D_PR(RB_2D_DA):
         beta1 = de.operators.integrate(e1*Ih_temp_x_, 'x', 'z')['g'][0,0]
         beta2 = de.operators.integrate(e2*Ih_temp_x_, 'x', 'z')['g'][0,0]
 
-        gamma1 = -self.mu * de.operators.integrate(e1**2, 'x', 'z')['g'][0,0] + de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
+        gamma1 = de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
         gamma2 = de.operators.integrate(e2*Ih_remainder_, 'x', 'z')['g'][0,0]
 
         # Set up linear system and solve
@@ -280,6 +282,64 @@ class RB_2D_PR(RB_2D_DA):
         print()
 
         Pr, PrRa = np.linalg.solve(A,b)
+        return float(Pr), float(PrRa/Pr)
+
+    def new_params2(self):
+        """
+        Method to estimate the parameters at each step, devised by B. Pachev and
+        J. Whitehead.
+
+        Parameters:
+            zeta (dedalus field): The true system state
+        """
+
+        # Set scales
+        self.solver.state['zeta'].set_scales(3/2)
+        self.solver.state['zeta_'].set_scales(3/2)
+
+        # Projections of true state and assimilating state
+        proj_zeta = P_N(self.solver.state['zeta'], self.N)
+        proj_zeta_ = P_N(self.solver.state['zeta_'], self.N)
+
+        # Find the projected error
+        proj_error = self.problem.domain.new_field()
+        proj_error.set_scales(3/2)
+        proj_error['g'] = proj_zeta - proj_zeta_
+
+        # Get backward time derivative
+        zeta_t = self.backward_time_derivative()
+        zeta_t.set_scales(3/2)
+
+        # set up coefficient on Pr
+        Ih_laplace_zeta_ = self.problem.domain.new_field()
+        Ih_laplace_zeta_.set_scales(3/2)
+        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
+
+        # set up coefficient on PrRa
+        Ih_temp_x_ = self.problem.domain.new_field()
+        Ih_temp_x_.set_scales(3/2)
+        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
+
+        # set up other coefficient
+        Ih_remainder_ = self.problem.domain.new_field()
+        Ih_remainder_.set_scales(3/2)
+        # v = -psi_z, w = psi_x
+        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
+
+        # Set up important constants
+        a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
+        b = de.operators.integrate(proj_error*Ih_temp_x_, 'x', 'z')['g'][0,0]
+        c = de.operators.integrate(proj_error*Ih_remainder_, 'x', 'z')['g'][0,0]
+
+        # Regularization weights. Can be changed
+        alpha = 1.
+        beta = 1.
+
+        # Regularized parameter estimates
+        Pr = c*a*beta/(beta*a**2 + alpha**b*2)
+        PrRa = c*alpha*b/(beta*a**2 + alpha**b*2)
+
+        # Return estimates
         return float(Pr), float(PrRa/Pr)
 
     def backward_time_derivative(self):
@@ -312,17 +372,19 @@ class RB_2D_PR(RB_2D_DA):
 
             # Make sure scales are set
             zeta_t.set_scales(3/2)
-            self.solver.state['zeta'].set_scales(3/2)
+            self.solver.state['zeta_'].set_scales(3/2)
             self.prev_state[-1].set_scales(3/2)
             self.prev_state[-2].set_scales(3/2)
 
-            c2, c1, c0 = fdcoeffs_v1(np.cumsum(self.dt_hist) - np.sum(self.dt_hist), 1)
+            # Calculate finite difference coefficients
+            c2, c1, c0 = fdcoeffs_v1([-self.dt_hist[-2]-self.dt_hist[-1], -self.dt_hist[-1], 0], 1)
 
             # Calculate
-            zeta_t['g'] = c0*self.solver.state['zeta']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
+            zeta_t['g'] = c0*self.solver.state['zeta_']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
 
             zeta_t.set_scales(3/2)
 
+        print(zeta_t['g'])
         return zeta_t
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=np.inf, stop_iteration=np.inf, tight=False,
@@ -430,7 +492,9 @@ class RB_2D_PR(RB_2D_DA):
                                   ("sqrt( integ(dx(dx(T-T_))**2 + dx(dz(T-T_))**2 + dz(dz(T-T_))**2, 'x', 'z'))", "T_h2_err"),
                                   ("sqrt(integ( dx(dx(v-v_))**2 + dz(dz(v-v_))**2 + dx(dz(v-v_))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2_err"),
                                   ("Pr + Pr_", 'Pr_est'),
-                                  ("Ra + (PrRa_/Pr)", 'Ra_est')
+                                  ("Ra + (PrRa_/Pr)", 'Ra_est'),
+                                  ("Pr", 'Pr_true'),
+                                  ("Ra", 'Ra_true')
                                  ]
 
             for task, name in analysis_tasks: self.annals.add_task(task, name=name)
@@ -528,7 +592,7 @@ class RB_2D_PR(RB_2D_DA):
 
                 elif task == 'T_':
 
-                    var['g'] = 1 - z + 0.1*np.sin(k*x)*np.sin(2*np.pi*z)
+                    var['g'] = 1 - z + 0.5*np.sin(k*x)*np.sin(2*np.pi*z)
 
                 else:
 
@@ -622,7 +686,7 @@ class RB_2D_PR(RB_2D_DA):
                     Ra_est = (self.problem.parameters['Pr']*self.problem.parameters['Ra'] + self.problem.parameters['PrRa_'].args[0])/Pr_est
 
                     # Get update
-                    new_Pr_est, new_Ra_est = self.new_params()
+                    new_Pr_est, new_Ra_est = self.new_params2()
 
                     # Crank-Nicholson integration for relaxation
                     Pr_est = ((1 - 0.5*self.alpha*self.dt)*Pr_est + self.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.alpha*self.dt)
@@ -647,6 +711,31 @@ class RB_2D_PR(RB_2D_DA):
 
                 print('Pr_error: ', self.problem.parameters['Pr_'].args[0])
                 print('PrRa_error: ', self.problem.parameters['PrRa_'].args[0])
+
+                # Get projection of difference between assimilating state and true state
+                self.zeta = self.solver.state['zeta']
+                self.zeta.set_scales(1)
+
+                # assimilating state
+                self.zeta_ = self.solver.state['zeta_']
+                self.zeta_.set_scales(1)
+
+                # Get projection of difference between assimilating state and true state
+                self.dzeta = self.problem.domain.new_field(name='dzeta')
+                self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
+
+                # Substitute this projection for the "driving" parameter in the assimilating system
+                self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
+                self.problem.parameters["driving"].args = [self.dzeta, self.N]
+
+                # Record state and dt
+                self.prev_state.append(self.solver.state['zeta_'])
+                self.prev_state.pop(0)
+                self.dt_hist.append(self.dt)
+                self.dt_hist.pop(0)
+
+                print('self.prev_state', self.prev_state)
+                print('self.dt_hist', self.dt_hist)
 
                 # Step
                 self.solver.step(self.dt)

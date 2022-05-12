@@ -184,6 +184,7 @@ class RB_2D_DA(RB_2D):
             self.problem.add_bc("right(psiz_)  = 0")
 
         elif BCs == "free-slip":
+
             # u'(z=0) = 0 --> v'(z=0) = 0 = w(z=0)
             self.problem.add_bc("left(dz(psiz))  = 0")
             self.problem.add_bc("left(dz(psiz_))  = 0")
@@ -494,6 +495,22 @@ class RB_2D_DA(RB_2D):
 
                 # Step
                 self.solver.step(self.dt)
+
+                # Get driving parameter
+                self.zeta = self.solver.state['zeta']
+                self.zeta.set_scales(1)
+
+                # assimilating state
+                self.zeta_ = self.solver.state['zeta_']
+                self.zeta_.set_scales(1)
+
+                # Get projection of difference between assimilating state and true state
+                self.dzeta = self.problem.domain.new_field(name='dzeta')
+                self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
+
+                # Substitute this projection for the "driving" parameter in the assimilating system
+                self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
+                self.problem.parameters["driving"].args = [self.dzeta, self.N]
 
                 # Record properties every tenth iteration
                 if self.solver.iteration % 10 == 0:

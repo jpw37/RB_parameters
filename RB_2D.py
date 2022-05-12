@@ -108,7 +108,8 @@ class RB_2D(BaseSimulator):
         domain = de.Domain([x_basis, z_basis], grid_dtype=np.float64)
 
         # Initialize the problem as an IVP
-        self.problem = de.IVP(domain, variables=['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz'])
+        self.varlist = ['T', 'Tz', 'psi', 'psiz', 'zeta', 'zetaz']
+        self.problem = de.IVP(domain, variables=self.varlist)
 
         # Set up remaining parameters
         self.setup_params(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl, Rayleigh=Rayleigh, **kwargs)
@@ -381,6 +382,30 @@ class RB_2D(BaseSimulator):
 
                 var = self.solver.state[task]
                 var['g'] = 0
+
+        elif initial_conditions == 'test':
+
+            # Initial time step
+            self.dt = 1e-8
+
+            # "Trivial" conditions.
+            eps = 1e-4
+            k = 3.117
+
+            # Grids
+            x, z = self.problem.domain.grids(scales=1)
+
+            for task in self.varlist:
+
+                var = self.solver.state[task]
+
+                if task == 'T':
+
+                    var['g'] = 1 - z + 0.5*np.sin(k*x)*np.sin(2*np.pi*z)
+
+                else:
+
+                    var['g'] = 0
 
         elif isinstance(initial_conditions, str):   # Load data from a file.
             # Resume: load the state of the last (merged) state file.
