@@ -47,7 +47,7 @@ def fdcoeffs_v1(stencil, d):
     # Create linear system
     A = np.vander(stencil, increasing=True).T
     b = np.zeros(len(stencil))
-    b[d] = factorial(d)
+    b[d] = float(factorial(d))
 
     # solve linear system
     return np.linalg.solve(A, b)
@@ -277,9 +277,6 @@ class RB_2D_PR(RB_2D_DA):
         # Set up linear system and solve
         A = np.array([[alpha1, beta1], [alpha2, beta2]])
         b = np.array([[gamma1], [gamma2]])
-        print()
-        print('Matrix: ', A, 'Vector: ', b)
-        print()
 
         Pr, PrRa = np.linalg.solve(A,b)
         return float(Pr), float(PrRa/Pr)
@@ -332,12 +329,16 @@ class RB_2D_PR(RB_2D_DA):
         c = de.operators.integrate(proj_error*Ih_remainder_, 'x', 'z')['g'][0,0]
 
         # Regularization weights. Can be changed
-        alpha = 1.
+        alpha = 1e5
         beta = 1.
 
+        # Regularization centers
+        x0 = self.Pr_guess
+        y0 = self.Ra_guess * self.Pr_guess
+
         # Regularized parameter estimates
-        Pr = c*a*beta/(beta*a**2 + alpha**b*2)
-        PrRa = c*alpha*b/(beta*a**2 + alpha**b*2)
+        Pr = (a*c*beta + (b**2)*x0*alpha - a*b*y0*beta)/(beta*a**2 + alpha**b*2)
+        PrRa = (b*c*alpha +(a**2)*y0*beta - a*b*x0*alpha)/(beta*a**2 + alpha**b*2)
 
         # Return estimates
         return float(Pr), float(PrRa/Pr)
@@ -378,6 +379,9 @@ class RB_2D_PR(RB_2D_DA):
 
             # Calculate finite difference coefficients
             c2, c1, c0 = fdcoeffs_v1([-self.dt_hist[-2]-self.dt_hist[-1], -self.dt_hist[-1], 0], 1)
+
+            print('Last two time steps: ', 'dt = '+str(self.dt_hist[-2]), 'dt = '+str(self.dt_hist[-1]))
+            print('Backwards finite difference coefficients: ', f'c2 = {c2}', f'c1 = {c1}', f'c0 = {c0}')
 
             # Calculate
             zeta_t['g'] = c0*self.solver.state['zeta_']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
@@ -672,6 +676,22 @@ class RB_2D_PR(RB_2D_DA):
                 # Use CFL condition to compute time step
                 self.dt = self.cfl.compute_dt()
 
+                if self.solver.iteration != 0:
+
+                    print(f'Entering iteration {self.solver.iteration}; dt = {self.dt}')
+
+                    plt.imshow(np.rot90(self.solver.state['zeta']), cmap='cividis')
+                    plt.title(f'True state at iteration {self.solver.iteration}')
+                    plt.colorbar()
+                    plt.axis('off')
+                    plt.show()
+
+                    plt.imshow(np.rot90(self.solver.state['zeta_']), cmap='cividis')
+                    plt.title(f'Assimilating state at iteration {self.solver.iteration}')
+                    plt.colorbar()
+                    plt.axis('off')
+                    plt.show()
+
                 # Update parameters: different on first iteration than subsequent iterations
                 if self.solver.iteration == 0:
 
@@ -733,9 +753,6 @@ class RB_2D_PR(RB_2D_DA):
                 self.prev_state.pop(0)
                 self.dt_hist.append(self.dt)
                 self.dt_hist.pop(0)
-
-                print('self.prev_state', self.prev_state)
-                print('self.dt_hist', self.dt_hist)
 
                 # Step
                 self.solver.step(self.dt)
