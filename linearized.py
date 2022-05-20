@@ -32,27 +32,7 @@ from base_simulator import BaseSimulator, RANK, SIZE
 from RB_2D import RB_2D, P_N
 from unified import RB_2D_DA
 
-def fdcoeffs_v1(stencil, d):
-    """
-    Given stencil points x_0 < x_1 < ... < x_n, returns coefficients
-    [c_0, c_1, ..., c_n] for which \sum_{i=0}^n c_i f(x_i) approximates
-    f^(d)(0), the dth-order derivative of f at zero, to n-d+1 th order.
-
-    Parameters:
-        stencil (ndarray): array of stencil points
-        d (int): order of derivative to approximate
-    """
-    assert len(stencil) > d
-
-    # Create linear system
-    A = np.vander(stencil, increasing=True).T
-    b = np.zeros(len(stencil))
-    b[d] = float(factorial(d))
-
-    # solve linear system
-    return np.linalg.solve(A, b)
-
-class RB_2D_PR(RB_2D_DA):
+class RB_2D_PR_Linearized(RB_2D_DA):
     """
     Manager for dedalus simulations of data assimilation and parameter recovery
     for 2D Rayleigh-Benard convection.
@@ -112,7 +92,7 @@ class RB_2D_PR(RB_2D_DA):
         self.logger.info("Auxiliary equations and BCs set up")
 
         # Initialize evolution equations
-        self.setup_evolution(PrRa_RHS=PrRa_RHS, nudge_T=nudge_T)
+        self.setup_evolution()
         self.logger.info("Evolution equations constructed")
 
         # Save system parameters in JSON format.
@@ -143,7 +123,7 @@ class RB_2D_PR(RB_2D_DA):
 
         # Fluid parameters
         self.problem.parameters['Ra'] = Rayleigh
-        self.problem.parameters['Pr'] = Prandtl
+        self.problem.parameters['PrInv'] = 1/Prandtl
 
         # Driving parameters
         self.problem.parameters['mu'] = mu
@@ -152,41 +132,28 @@ class RB_2D_PR(RB_2D_DA):
         self.N = N
 
         # GeneralFunction for driving
-        self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
+        self.problem.parameters["driving_zeta"] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
+        self.problem.parameters["driving_T"] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
 
         # Parameter estimation
-        self.problem.parameters['Pr_'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
-        self.problem.parameters['PrRa_'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
-        self.Pr_guess = Pr_guess
+        self.problem.parameters['PrInv_'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
+        self.problem.parameters['Ra_'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
+        self.InvPr_guess = 1/Pr_guess
         self.Ra_guess = Ra_guess
 
-        # Need to initialize the previous 2 states and corresponding time steps
-        self.prev_state = [None] * 2
-        self.dt_hist = [None] * 2
 
-        # Relaxation coefficient
-        self.alpha = alpha
-
-    def setup_evolution(self, PrRa_RHS, nudge_T):
+    def setup_evolution(self):
         """
         Set up the Boussinesq evolution equation and nudging equation for
         data assimilation.
         """
 
         # Boussinesq evolution equations
-        self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz))  - dt(zeta) = v*dx(zeta) + w*zetaz")
-        self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz) = - v*dx(T) - w*Tz")
+        self.problem.add_equation("Ra*dx(T) + dx(dx(zeta)) + dz(zetaz)  - dt(zeta) = v*dx(zeta) + w*zetaz")
+        self.problem.add_equation("-dt(T) + PrInv*(dx(dx(T)) + dz(Tz)) = v*dx(T) + w*Tz")
 
-        # Nudging equations
-        if PrRa_RHS:
-            self.problem.add_equation("dt(zeta_) = -v_*dx(zeta_) - w_*zetaz_  + PrRa_*dx(T_) + Pr_*(dx(dx(zeta_)) + dz(zetaz_)) + mu*driving ")
-        else:
-            self.problem.add_equation("Pr*(Ra*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - PrRa_*dx(T_) - Pr_*(dx(dx(zeta_)) + dz(zetaz_))")
-
-        if nudge_T:
-            pass
-        else:
-            self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
+        self.problem.add_equation("dx(dx(zeta_)) + dz(zetaz_) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - Ra_*dx(T_) - mu*driving_zeta")
+        self.problem.add_equation("-dt(T_) + PrInv*(dx(dx(T_)) + dz(Tz_))= v_*dx(T_)+w_*Tz_  - mu*driving_T")
 
     def const_val(self, value, return_field=False):
         """
@@ -206,294 +173,36 @@ class RB_2D_PR(RB_2D_DA):
 
     def new_params(self):
         """
-        Method to estimate the parameters at each step, devised by B. Pachev and
-        J. Whitehead.
 
-        Parameters:
-            zeta (dedalus field): The true system state
         """
 
         # Set scales
         self.solver.state['zeta'].set_scales(3/2)
         self.solver.state['zeta_'].set_scales(3/2)
 
-        # Projections of true state
-        proj_zeta = P_N(self.solver.state['zeta'], self.N)
-        proj_T = P_N(self.solver.state['T'], self.N)
-
-        # Get backward time derivative
-        zeta_t = self.backward_time_derivative()
-        zeta_t.set_scales(3/2)
-
-        # set up the alpha_i coefficients
-        Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(3/2)
-        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
-
-        # set up the beta_i coefficients
-        Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(3/2)
-        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
-
-        # set up the gamma_i coefficients
-        Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(3/2)
-        # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
-
-        # Set e1 to be the projection of the error, guaranteeing exponential decay of the error
-        e1 = self.problem.domain.new_field()
-        e1.set_scales(3/2)
-        e1['g'] = proj_zeta - P_N(self.solver.state['zeta_'], self.N)
-
-        # Normalize
-        e1['g'] /= np.sqrt(de.operators.integrate(e1**2, 'x', 'z')['g'][0,0])
-
-        # Many choices are possible for e2
-        e2 = self.problem.domain.new_field()
-        e2.set_scales(3/2)
-        e2['g'] = Ih_temp_x_['g']
-
-        # Another possibility (to guarantee decay of error in H1)
-        # e2['g'] = e1.differentiate(z=2)['g'] + e1.differentiate(x=2)['g']
-
-        #Perform modified Gram-Schmidt on e1 and e2 (no need to normalize)
-        c = de.operators.integrate(e1*e2,'x','z')['g']*e1['g']
-        e2['g'] = e2['g'] - c
-
-        # Normalize
-        e2['g'] /= np.sqrt(de.operators.integrate(e2**2, 'x', 'z')['g'][0,0])
-
-        # Now e1 and e2 should be orthogonal. Calculate the coefficients
-        alpha1 = de.operators.integrate(e1*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
-        alpha2 = de.operators.integrate(e2*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
-
-        beta1 = de.operators.integrate(e1*Ih_temp_x_, 'x', 'z')['g'][0,0]
-        beta2 = de.operators.integrate(e2*Ih_temp_x_, 'x', 'z')['g'][0,0]
-
-        gamma1 = de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
-        gamma2 = de.operators.integrate(e2*Ih_remainder_, 'x', 'z')['g'][0,0]
-
-        # Set up linear system and solve
-        A = np.array([[alpha1, beta1], [alpha2, beta2]])
-        b = np.array([[gamma1], [gamma2]])
-
-        Pr, PrRa = np.linalg.solve(A,b)
-        return float(Pr), float(PrRa/Pr)
-
-    def new_params2(self):
-        """
-        Method to estimate the parameters at each step, devised by B. Pachev and
-        J. Whitehead.
-
-        Parameters:
-            zeta (dedalus field): The true system state
-        """
-
-        # Set scales
-        self.solver.state['zeta'].set_scales(3/2)
-        self.solver.state['zeta_'].set_scales(3/2)
-
-        # Projections of true state and assimilating state
-        proj_zeta = P_N(self.solver.state['zeta'], self.N)
-        proj_zeta_ = P_N(self.solver.state['zeta_'], self.N)
-
-        # Find the projected error
-        proj_error = self.problem.domain.new_field()
-        proj_error.set_scales(3/2)
-        proj_error['g'] = proj_zeta - proj_zeta_
-
-        # Get backward time derivative
-        zeta_t = self.backward_time_derivative()
-        zeta_t.set_scales(3/2)
-
-        # set up coefficient on Pr
-        Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(3/2)
-        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
-
-        # set up coefficient on PrRa
-        Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(3/2)
-        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
-
-        # set up other coefficient
-        Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(3/2)
-        # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
-
-        # Set up important constants
-        a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
-        b = de.operators.integrate(proj_error*Ih_temp_x_, 'x', 'z')['g'][0,0]
-        c = de.operators.integrate(proj_error*Ih_remainder_, 'x', 'z')['g'][0,0]
-
-        # Regularization weights. Can be changed
-        alpha = 1e5
-        beta = 1.
-
-        # Regularization centers
-        x0 = self.Pr_guess
-        y0 = self.Ra_guess * self.Pr_guess
-
-        # Regularized parameter estimates
-        Pr = (a*c*beta + (b**2)*x0*alpha - a*b*y0*beta)/(beta*a**2 + alpha**b*2)
-        PrRa = (b*c*alpha +(a**2)*y0*beta - a*b*x0*alpha)/(beta*a**2 + alpha**b*2)
-
-        # Return estimates
-        return float(Pr), float(PrRa/Pr)
-
-    def est_Ra(self):
-        """
-        Method to estimate the parameters at each step, devised by B. Pachev and
-        J. Whitehead.
-
-        Parameters:
-            zeta (dedalus field): The true system state
-        """
-
-        # Set scales
-        self.solver.state['zeta'].set_scales(3/2)
-        self.solver.state['zeta_'].set_scales(3/2)
-
-        # Projections of true state and assimilating state
-        proj_zeta = P_N(self.solver.state['zeta'], self.N)
-        proj_zeta_ = P_N(self.solver.state['zeta_'], self.N)
-
-        # Find the projected error
-        proj_error = self.problem.domain.new_field()
-        proj_error.set_scales(3/2)
-        proj_error['g'] = proj_zeta - proj_zeta_
-
-        # Get backward time derivative
-        zeta_t = self.backward_time_derivative()
-        zeta_t.set_scales(3/2)
-
-        # set up coefficient on Pr
-        Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(3/2)
-        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
-
-        # set up coefficient on PrRa
-        Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(3/2)
-        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
-
-        # set up other coefficient
-        Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(3/2)
-        # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
-
-        # Set up important constants
-        a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
-        b = de.operators.integrate(proj_error*Ih_temp_x_, 'x', 'z')['g'][0,0]
-        c = de.operators.integrate(proj_error*Ih_remainder_, 'x', 'z')['g'][0,0]
-
-        PrRa = (c - a*self.problem.parameters['Pr'])/b
-
-        # Return estimates
-        return self.problem.parameters['Pr'], PrRa/self.problem.parameters['Pr']
-
-    def est_Pr(self):
-        """
-        Method to estimate the parameters at each step, devised by B. Pachev and
-        J. Whitehead.
-
-        Parameters:
-            zeta (dedalus field): The true system state
-        """
-
-        # Set scales
-        self.solver.state['zeta'].set_scales(3/2)
-        self.solver.state['zeta_'].set_scales(3/2)
-
-        # Projections of true state and assimilating state
-        proj_zeta = P_N(self.solver.state['zeta'], self.N)
-        proj_zeta_ = P_N(self.solver.state['zeta_'], self.N)
-
-        # Find the projected error
-        proj_error = self.problem.domain.new_field()
-        proj_error.set_scales(3/2)
-        proj_error['g'] = proj_zeta - proj_zeta_
-
-        # Get backward time derivative
-        zeta_t = self.backward_time_derivative()
-        zeta_t.set_scales(3/2)
-
-        # set up coefficient on Pr
-        Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(3/2)
-        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
-
-        # set up coefficient on PrRa
-        Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(3/2)
-        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
-
-        # set up other coefficient
-        Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(3/2)
-        # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
-
-        # Set up important constants
-        a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
-        b = de.operators.integrate(proj_error*Ih_temp_x_, 'x', 'z')['g'][0,0]
-        c = de.operators.integrate(proj_error*Ih_remainder_, 'x', 'z')['g'][0,0]
-
-        Pr = (c - b*self.problem.parameters['Pr']*self.problem.parameters['Ra'])/a
-
-        # Return estimates
-        return Pr, self.problem.parameters['Ra']
-
-    def backward_time_derivative(self):
-        """
-        Calculuate the time derivative of the observed vorticity based off of
-        the estimating system. Derivation of the derivative approximation is made
-        in the main document.
-        """
-
-        ### NOTE: Use projection of true state.
-
-        if None in self.dt_hist:
-            # There may be a better way to do this.  Right now zeta_t=0 for the first 2 time steps
-            zeta_t = self.const_val(0., return_field=True)
-
-        else:
-            dt = self.dt_hist
-            dt_ratio = dt[-1]/dt[-2]
-            dt_diff = dt[-1]-dt[-2]
-            dt_sum = dt[-1]+dt[-2]
-
-            # Now to set up the coefficients of the finite differencing
-            c0 = - (dt_diff*(dt[-1]**2 + dt_sum**2))/(dt[-1]*dt[-2])
-            c1 = (dt_diff*dt_sum**2)/(dt[-1]*dt[-2])
-            c2 = dt_ratio*dt_diff
-
-            #Now using these coefficients we compute a 2nd order backward difference
-            #approximation to the derivative of the vorticity
-            zeta_t = self.problem.domain.new_field()
-
-            # Make sure scales are set
-            zeta_t.set_scales(3/2)
-            self.solver.state['zeta_'].set_scales(3/2)
-            self.prev_state[-1].set_scales(3/2)
-            self.prev_state[-2].set_scales(3/2)
-
-            # Calculate finite difference coefficients
-            c2, c1, c0 = fdcoeffs_v1([-self.dt_hist[-2]-self.dt_hist[-1], -self.dt_hist[-1], 0], 1)
-
-            print('Last two time steps: ', 'dt = '+str(self.dt_hist[-2]), 'dt = '+str(self.dt_hist[-1]))
-            print('Backwards finite difference coefficients: ', f'c2 = {c2}', f'c1 = {c1}', f'c0 = {c0}')
-
-            # Calculate
-            zeta_t['g'] = c0*self.solver.state['zeta_']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
-
-            zeta_t.set_scales(3/2)
-
-        print(zeta_t['g'])
-        return zeta_t
+        # Projections of errors
+        proj_zeta_err = self.problem.domain.new_field()
+        proj_zeta_err.set_scales(3/2)
+        proj_zeta_err['g'] = P_N(self.solver.state['zeta']-self.solver.state['zeta_'], self.N)
+
+        proj_T_err = self.problem.domain.new_field()
+        proj_T_err.set_scales(3/2)
+        proj_T_err['g'] = P_N(self.solver.state['T']-self.solver.state['T_'], self.N)
+
+        # Important terms
+        Ih_temp_x = self.problem.domain.new_field()
+        Ih_temp_x.set_scales(3/2)
+        Ih_temp_x['g'] = P_N(self.solver.state['T'].differentiate(x=1), self.N)
+
+        Ih_laplace_temp_= self.problem.domain.new_field()
+        Ih_laplace_temp_.set_scales(3/2)
+        Ih_laplace_temp_['g'] = P_N(self.solver.state['T_'].differentiate(x=2)+self.solver.state['T_'].differentiate(z=2), self.N)
+
+        # Calculate adjustments
+        adjust_Ra = self.mu*de.operators.integrate(proj_zeta_err**2, 'x', 'z')['g'][0,0]/de.operators.integrate(Ih_temp_x*proj_zeta_err, 'x', 'z')['g'][0,0]
+        adjust_PrInv = self.mu*de.operators.integrate(proj_T_err**2, 'x', 'z')['g'][0,0]/de.operators.integrate(Ih_laplace_temp_*proj_T_err, 'x', 'z')['g'][0,0]
+
+        return float(self.problem.parameters['PrInv_'].args[0]-adjust_PrInv), float(self.problem.parameters['Ra_'].args[0]-adjust_Ra)
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=np.inf, stop_iteration=np.inf, tight=False,
                        save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None, **kwargs):
@@ -599,10 +308,6 @@ class RB_2D_PR(RB_2D_DA):
                                   ("sqrt(integ(dx(v-v_)**2 + dz(v-v_)**2 + dx(w-w_)**2 + dz(w-w_)**2, 'x', 'z'))", "gradu_err"),
                                   ("sqrt( integ(dx(dx(T-T_))**2 + dx(dz(T-T_))**2 + dz(dz(T-T_))**2, 'x', 'z'))", "T_h2_err"),
                                   ("sqrt(integ( dx(dx(v-v_))**2 + dz(dz(v-v_))**2 + dx(dz(v-v_))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2_err"),
-                                  ("Pr + Pr_", 'Pr_est'),
-                                  ("Ra + (PrRa_/Pr)", 'Ra_est'),
-                                  ("Pr", 'Pr_true'),
-                                  ("Ra", 'Ra_true')
                                  ]
 
             for task, name in analysis_tasks: self.annals.add_task(task, name=name)
@@ -632,8 +337,20 @@ class RB_2D_PR(RB_2D_DA):
         self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
 
         # Substitute this projection for the "driving" parameter in the assimilating system
-        self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
-        self.problem.parameters["driving"].args = [self.dzeta, self.N]
+        self.problem.parameters["driving_zeta"].original_args = [self.dzeta, self.N]
+        self.problem.parameters["driving_zeta"].args = [self.dzeta, self.N]
+
+        # Define args for driving parameter
+        self.T = self.solver.state['T']
+        self.T.set_scales(1)
+        self.T_ = self.solver.state['T_']
+        self.T_.set_scales(1)
+        self.dT = self.problem.domain.new_field(name='dT')
+        self.dT['g'] = self.T['g'] - self.T_['g']
+
+        # Substitute this projection for the "driving" parameter in the assimilating system
+        self.problem.parameters["driving_T"].original_args = [self.dT, self.N]
+        self.problem.parameters["driving_T"].args = [self.dT, self.N]
 
         # Set solver attributes
         self.solver.stop_sim_time = sim_time
@@ -833,11 +550,19 @@ class RB_2D_PR(RB_2D_DA):
                     plt.axis('off')
                     plt.show()
 
-                    print(self.solver.state['zeta']['g'])
-
-
+                    plt.imshow(np.rot90(self.solver.state['T']['g']), cmap='coolwarm', vmax=1, vmin=0)
+                    plt.title(f'True state at iteration {self.solver.iteration}')
+                    plt.colorbar()
+                    plt.axis('off')
+                    plt.show()
 
                     plt.imshow(np.rot90(self.solver.state['zeta_']['g']), cmap='cividis')
+                    plt.title(f'Assimilating state at iteration {self.solver.iteration}')
+                    plt.colorbar()
+                    plt.axis('off')
+                    plt.show()
+
+                    plt.imshow(np.rot90(self.solver.state['T']['g']), cmap='coolwarm',  vmax=1, vmin=0)
                     plt.title(f'Assimilating state at iteration {self.solver.iteration}')
                     plt.colorbar()
                     plt.axis('off')
@@ -846,65 +571,46 @@ class RB_2D_PR(RB_2D_DA):
                 # Update parameters: different on first iteration than subsequent iterations
                 if self.solver.iteration == 0:
 
-                    # Use inital guess
-                    Pr_ = self.Pr_guess - self.problem.parameters['Pr']
-                    PrRa_ = self.Pr_guess * self.Ra_guess - self.problem.parameters['Pr']*self.problem.parameters['Ra']
+                    # Use initial guesses
+                    PrInv_est, Ra_est = self.InvPr_guess, self.Ra_guess
 
-                #elif self.solver.sim_time > 0.1:
-                elif self.solver.iteration > 50:
+                elif self.solver.iteration % 50 == 0:
 
-                    # Start with the old estimates
-                    Pr_est = self.problem.parameters['Pr'] + self.problem.parameters['Pr_'].args[0]
-                    Ra_est = (self.problem.parameters['Pr']*self.problem.parameters['Ra'] + self.problem.parameters['PrRa_'].args[0])/Pr_est
+                    # Get update
+                    PrInv_est, Ra_est = self.new_params()
 
-                    # Get update (key place)
-                    new_Pr_est, new_Ra_est = self.est_Ra()
-
-                    # Crank-Nicholson integration for relaxation
-                    Pr_est = ((1 - 0.5*self.alpha*self.dt)*Pr_est + self.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.alpha*self.dt)
-                    Ra_est = ((1 - 0.5*self.alpha*self.dt)*Ra_est + self.alpha*self.dt*new_Ra_est)/(1 + 0.5*self.alpha*self.dt)
-
-                    # Calculate parameters which should be used
-                    Pr_ = Pr_est - self.problem.parameters['Pr']
-                    PrRa_ = Pr_est*Ra_est - self.problem.parameters['Pr']*self.problem.parameters['Ra']
-
-                    print('new Pr_est: ', new_Pr_est)
-                    print('new Ra_est: ', new_Ra_est)
-
-                    print('relaxed Pr_est: ', Pr_est)
-                    print('relaxed Ra_est: ', Ra_est)
+                    print("New Rayleigh: ", Ra_est)
 
 
                 # Set parameters
-                self.problem.parameters['Pr_'].original_args = [Pr_]
-                self.problem.parameters['PrRa_'].original_args = [PrRa_]
-                self.problem.parameters['Pr_'].args = [Pr_]
-                self.problem.parameters['PrRa_'].args = [PrRa_]
+                self.problem.parameters['PrInv_'].original_args = [PrInv_est]
+                self.problem.parameters['Ra_'].original_args = [Ra_est]
+                self.problem.parameters['PrInv_'].args = [PrInv_est]
+                self.problem.parameters['Ra_'].args = [Ra_est]
 
-                print('Pr_error: ', self.problem.parameters['Pr_'].args[0])
-                print('PrRa_error: ', self.problem.parameters['PrRa_'].args[0])
-
-                # Get projection of difference between assimilating state and true state
+                # Define args for driving parameter
                 self.zeta = self.solver.state['zeta']
                 self.zeta.set_scales(1)
-
-                # assimilating state
                 self.zeta_ = self.solver.state['zeta_']
                 self.zeta_.set_scales(1)
-
-                # Get projection of difference between assimilating state and true state
                 self.dzeta = self.problem.domain.new_field(name='dzeta')
                 self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
 
                 # Substitute this projection for the "driving" parameter in the assimilating system
-                self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
-                self.problem.parameters["driving"].args = [self.dzeta, self.N]
+                self.problem.parameters["driving_zeta"].original_args = [self.dzeta, self.N]
+                self.problem.parameters["driving_zeta"].args = [self.dzeta, self.N]
 
-                # Record state and dt
-                self.prev_state.append(self.solver.state['zeta_'])
-                self.prev_state.pop(0)
-                self.dt_hist.append(self.dt)
-                self.dt_hist.pop(0)
+                # Define args for driving parameter
+                self.T = self.solver.state['T']
+                self.T.set_scales(1)
+                self.T_ = self.solver.state['T_']
+                self.T_.set_scales(1)
+                self.dT = self.problem.domain.new_field(name='dT')
+                self.dT['g'] = self.T['g'] - self.T_['g']
+
+                # Substitute this projection for the "driving" parameter in the assimilating system
+                self.problem.parameters["driving_T"].original_args = [self.dT, self.N]
+                self.problem.parameters["driving_T"].args = [self.dT, self.N]
 
                 # Step
                 self.solver.step(self.dt)
@@ -960,7 +666,7 @@ class RB_2D_PR(RB_2D_DA):
             T_h2 = data["tasks/T_h2"][:,0,0]
             u_h2 = data["tasks/u_h2"][:,0,0]
 
-        with plt.style.context("classic"): # .mplstyle
+        with plt.style.context(".mplstyle"):
             # Make subplots and a big plot for an overlay.
             fig = plt.figure(figsize=(12,6))
             ax1 = plt.subplot2grid((3,4), (0,0))
