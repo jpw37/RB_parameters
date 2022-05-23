@@ -542,7 +542,7 @@ class RB_2D_PR_Linearized(RB_2D_DA):
 
                 if self.solver.iteration != 0:
 
-                    print(f'Entering iteration {self.solver.iteration}; dt = {self.dt}')
+                    print(f'Entering iteration {self.solver.iteration}; dt = {self.dt};, time = {self.solver.sim_time}')
 
                     plt.imshow(np.rot90(self.solver.state['zeta']['g']), cmap='cividis')
                     plt.title(f'True state at iteration {self.solver.iteration}')

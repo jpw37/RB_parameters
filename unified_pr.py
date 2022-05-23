@@ -31,6 +31,7 @@ from dedalus.core.operators import GeneralFunction
 from base_simulator import BaseSimulator, RANK, SIZE
 from RB_2D import RB_2D, P_N
 from unified import RB_2D_DA
+from initial_conditions import *
 
 def fdcoeffs_v1(stencil, d):
     """
@@ -496,7 +497,7 @@ class RB_2D_PR(RB_2D_DA):
         return zeta_t
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=np.inf, stop_iteration=np.inf, tight=False,
-                       save=.05, save_tasks=None, analysis=True, analysis_tasks=None, initial_conditions=None, **kwargs):
+                       save=.05, save_tasks=None, analysis=True, analysis_tasks=None, ic=None, **kwargs):
         """
         Load initial conditions, run the simulation, and merge results.
 
@@ -549,8 +550,23 @@ class RB_2D_PR(RB_2D_DA):
         # Build the solver
         self.solver = self.problem.build_solver(scheme)
 
+        # Load in metadata
+        self.dt = ic.get_metadata('timestep')
+        self.solver.sim_time = ic.get_metadata('sim_time')
+        self.solver.initial_iteration = ic.get_metadata('iteration')
+        self.solver.iteration = ic.get_metadata('iteration')
+
         # Set up initial conditions
-        self.setup_ic(initial_conditions)
+        for name in ic.get_varlist():
+
+            # Get data
+            data = ic.get_state(name)
+            chunk = data.shape[1] // SIZE
+            subset = data[:,RANK*chunk:(RANK+1)*chunk]
+
+            # Change the corresponding state variable
+            self.solver.state[name].set_scales(data.shape[0]/self.problem.parameters["xsize"])
+            self.solver.state[name]['g'] = subset
 
         # State snapshots -----------------------------------------------------
         if save:
@@ -643,165 +659,6 @@ class RB_2D_PR(RB_2D_DA):
         # Set a flag
         self.solver_setup = True
 
-    def setup_ic(self, initial_conditions):
-        """
-        Loads initial conditions from a filename.
-
-        initial_conditions (None, str): determines from what source to
-            draw the initial conditions. Valid options are as follows:
-            - None: use trivial conditions (T_ = 1 - z, T = 1 - z + eps).
-            - 'resume': use the most recent state file in the
-                records directory (load both model and DA system).
-            - An .h5 filename: load state variables for the model and
-                reset the data assimilation state variables to zero.
-        """
-        # Initial conditions --------------------------------------------------
-        if initial_conditions is None:
-
-            # "Trivial" conditions.
-            eps = 1e-4
-            k = 3.117
-
-            # Time step
-            self.dt = 1e-8
-
-            # Get grids from problem
-            x, z = self.problem.domain.grids(scales=1)
-
-            # Get temperature field
-            T = self.solver.state['T']
-
-            # Start T from rest plus a small perturbation
-            T['g']  = 1 - z + eps*np.sin(k*x)*np.sin(2*np.pi*z)
-
-            T.differentiate('z', out=self.solver.state['Tz'])
-
-            self.logger.info("Using trivial initial conditions")
-
-        elif initial_conditions == 'test':
-
-            # Initial time step
-            self.dt = 1e-8
-
-            # "Trivial" conditions.
-            eps = 1e-4
-            k = 3.117
-
-            # Grids
-            x, z = self.problem.domain.grids(scales=1)
-
-            for task in self.varlist:
-
-                var = self.solver.state[task]
-
-                if task == 'T':
-
-                    var['g'] = 1 - z + 0.5*np.sin(k*x)*np.sin(2*np.pi*z)
-
-                elif task == 'T_':
-
-                    var['g'] = 1 - z + 0.5*np.sin(k*x)*np.sin(2*np.pi*z)
-
-                else:
-
-                    var['g'] = 0
-
-        elif isinstance(initial_conditions, tuple):
-
-            with h5py.File(initial_conditions[0], 'r') as infile:
-
-                # Initial time step
-                self.dt = 1e-8
-
-                for name in ["T", "Tz", "psi", "psiz", "zeta", "zetaz"]:
-
-                    # Get data
-                    data = infile["tasks/"+name][-1,:,:]
-
-                    # Determine the chunk belonging to this process.
-                    chunk = data.shape[1] // SIZE
-                    subset = data[:,RANK*chunk:(RANK+1)*chunk]
-
-                    # Change the corresponding state variable.
-                    scale = self.solver.state[name]['g'].shape[0] / \
-                                        self.problem.parameters["xsize"]
-                    self.solver.state[name].set_scales(data.shape[0]/self.problem.parameters["xsize"])#JW my ad-hoc new resolution restart
-                    #solver.state[name].set_scales(1)
-                    self.solver.state[name]['g'] = subset
-                    self.solver.state[name].set_scales(scale)
-
-            with h5py.File(initial_conditions[1], 'r') as infile:
-
-                for name in ["T_", "Tz_", "psi_", "psiz_", "zeta_", "zetaz_"]:
-
-                    # Get data
-                    data = infile["tasks/"+name[:-1]][-1,:,:]
-
-                    # Determine the chunk belonging to this process.
-                    chunk = data.shape[1] // SIZE
-                    subset = data[:,RANK*chunk:(RANK+1)*chunk]
-
-                    # Change the corresponding state variable.
-                    scale = self.solver.state[name]['g'].shape[0] / \
-                                        self.problem.parameters["xsize"]
-                    self.solver.state[name].set_scales(data.shape[0]/self.problem.parameters["xsize"])#JW my ad-hoc new resolution restart
-                    #solver.state[name].set_scales(1)
-                    self.solver.state[name]['g'] = subset
-                    self.solver.state[name].set_scales(scale)
-
-        elif isinstance(initial_conditions, str):   # Load data from a file.
-            # Resume: load the state of the last (merged) state file.
-            resume = initial_conditions == "resume"
-            if resume:
-                initial_conditions = self._get_merged_file("states")
-            if not initial_conditions.endswith(".h5"):
-                raise ValueError("'{}' is not an h5 file".format(
-                                                        initial_conditions))
-            # Load the data from the specified h5 file into the system.
-            self.logger.info("Loading initial conditions from {}".format(
-                                                        initial_conditions))
-
-            with h5py.File(initial_conditions, 'r') as infile:
-                self.dt = infile["scales/timestep"][-1] * .001    # JW: initial dt
-#                dt = infile["scales/timestep"][-1] * .01    # initial dt
-                errs = []
-                tasks = ["T", "Tz", "psi", "psiz", "zeta", "zetaz"]
-                if resume:      # Only load assimilating variables to resume.
-                    tasks += ["T_", "Tz_", "psi_", "psiz_", "zeta_", "zetaz_"]
-                    self.solver.sim_time = infile["scales/sim_time"][-1]
-                    niters = infile["scales/iteration"][-1]
-                    self.solver.initial_iteration = niters
-                    self.solver.iteration = niters
-                for name in tasks:
-                    # Get task data from the h5 file (recording failures).
-                    try:
-                        data = infile["tasks/"+name][-1,:,:]
-                    except KeyError as e:
-                        errs.append("tasks/"+name)
-                        continue
-                    # Determine the chunk belonging to this process.
-                    chunk = data.shape[1] // SIZE
-                    subset = data[:,RANK*chunk:(RANK+1)*chunk]
-                    # Change the corresponding state variable.
-                    scale = self.solver.state[name]['g'].shape[0] / \
-                                        self.problem.parameters["xsize"]
-                    self.solver.state[name].set_scales(data.shape[0]/self.problem.parameters["xsize"])#JW my ad-hoc new resolution restart
-                    #solver.state[name].set_scales(1)
-                    self.solver.state[name]['g'] = subset
-                    self.solver.state[name].set_scales(scale)
-                if errs:
-                    raise KeyError("Missing keys in '{}': '{}'".format(
-                                    initial_conditions, "', '".join(errs)))
-
-        # Initial conditions for assimilating system: T_0 = P_4(T0).
-        # if not resume:
-        #    G = self.problem.domain.new_field()
-        #    G['c'] = solver.state['T']['c'].copy()
-        #    solver.state['T_']['g'] = BoussinesqDataAssimilation2D.P_N(
-        #                                                        G, 4, True)
-        #    solver.state['T_'].differentiate('z', out=solver.state['Tz_'])
-
-
     def run_simulation(self):
         """
         Runs the simulation defined in self.setup_simulation, and then merges
@@ -823,9 +680,9 @@ class RB_2D_PR(RB_2D_DA):
                 # Use CFL condition to compute time step
                 self.dt = self.cfl.compute_dt()
 
-                if self.solver.iteration != 0:
+                if self.solver.iteration != self.solver.initial_iteration:
 
-                    print(f'Entering iteration {self.solver.iteration}; dt = {self.dt}')
+                    print(f'Entering iteration {self.solver.iteration}; dt = {self.dt};, time = {self.solver.sim_time}')
 
                     plt.imshow(np.rot90(self.solver.state['zeta']['g']), cmap='cividis')
                     plt.title(f'True state at iteration {self.solver.iteration}')
@@ -844,14 +701,14 @@ class RB_2D_PR(RB_2D_DA):
                     plt.show()
 
                 # Update parameters: different on first iteration than subsequent iterations
-                if self.solver.iteration == 0:
+                if self.solver.iteration == self.solver.initial_iteration:
 
                     # Use inital guess
                     Pr_ = self.Pr_guess - self.problem.parameters['Pr']
                     PrRa_ = self.Pr_guess * self.Ra_guess - self.problem.parameters['Pr']*self.problem.parameters['Ra']
 
                 #elif self.solver.sim_time > 0.1:
-                elif self.solver.iteration > 50:
+                elif self.solver.iteration > np.inf:
 
                     # Start with the old estimates
                     Pr_est = self.problem.parameters['Pr'] + self.problem.parameters['Pr_'].args[0]
@@ -1181,3 +1038,160 @@ class RB_2D_PR(RB_2D_DA):
         if os.path.isfile(oldfile):
             self.logger.info("\tDeleting old animation '{}'".format(oldfile))
             os.remove(oldfile)
+
+# def setup_ic(self, initial_conditions):
+#     """
+#     Loads initial conditions from a filename.
+#
+#     initial_conditions (None, str): determines from what source to
+#         draw the initial conditions. Valid options are as follows:
+#         - None: use trivial conditions (T_ = 1 - z, T = 1 - z + eps).
+#         - 'resume': use the most recent state file in the
+#             records directory (load both model and DA system).
+#         - An .h5 filename: load state variables for the model and
+#             reset the data assimilation state variables to zero.
+#     """
+#     # Initial conditions --------------------------------------------------
+#     if initial_conditions is None:
+#
+#         # "Trivial" conditions.
+#         eps = 1e-4
+#         k = 3.117
+#
+#         # Time step
+#         self.dt = 1e-8
+#
+#         # Get grids from problem
+#         x, z = self.problem.domain.grids(scales=1)
+#
+#         # Get temperature field
+#         T = self.solver.state['T']
+#
+#         # Start T from rest plus a small perturbation
+#         T['g']  = 1 - z + eps*np.sin(k*x)*np.sin(2*np.pi*z)
+#
+#         T.differentiate('z', out=self.solver.state['Tz'])
+#
+#         self.logger.info("Using trivial initial conditions")
+#
+#     elif initial_conditions == 'test':
+#
+#         # Initial time step
+#         self.dt = 1e-8
+#
+#         # "Trivial" conditions.
+#         eps = 1e-4
+#         k = 3.117
+#
+#         # Grids
+#         x, z = self.problem.domain.grids(scales=1)
+#
+#         for task in self.varlist:
+#
+#             var = self.solver.state[task]
+#
+#             if task == 'T':
+#
+#                 var['g'] = 1 - z + 0.5*np.sin(k*x)*np.sin(2*np.pi*z)
+#
+#             elif task == 'T_':
+#
+#                 var['g'] = 1 - z + 0.5*np.sin(k*x)*np.sin(2*np.pi*z)
+#
+#             else:
+#
+#                 var['g'] = 0
+#
+#     elif isinstance(initial_conditions, tuple):
+#
+#         with h5py.File(initial_conditions[0], 'r') as infile:
+#
+#             # Initial time step
+#             self.dt = 1e-8
+#
+#             for name in ["T", "Tz", "psi", "psiz", "zeta", "zetaz"]:
+#
+#                 # Get data
+#                 data = infile["tasks/"+name][-1,:,:]
+#
+#                 # Determine the chunk belonging to this process.
+#                 chunk = data.shape[1] // SIZE
+#                 subset = data[:,RANK*chunk:(RANK+1)*chunk]
+#
+#                 # Change the corresponding state variable.
+#                 scale = self.solver.state[name]['g'].shape[0] / \
+#                                     self.problem.parameters["xsize"]
+#                 self.solver.state[name].set_scales(data.shape[0]/self.problem.parameters["xsize"])#JW my ad-hoc new resolution restart
+#                 #solver.state[name].set_scales(1)
+#                 self.solver.state[name]['g'] = subset
+#                 self.solver.state[name].set_scales(scale)
+#
+#         with h5py.File(initial_conditions[1], 'r') as infile:
+#
+#             for name in ["T_", "Tz_", "psi_", "psiz_", "zeta_", "zetaz_"]:
+#
+#                 # Get data
+#                 data = infile["tasks/"+name[:-1]][-1,:,:]
+#
+#                 # Determine the chunk belonging to this process.
+#                 chunk = data.shape[1] // SIZE
+#                 subset = data[:,RANK*chunk:(RANK+1)*chunk]
+#
+#                 # Change the corresponding state variable.
+#                 scale = self.solver.state[name]['g'].shape[0] / \
+#                                     self.problem.parameters["xsize"]
+#                 self.solver.state[name].set_scales(data.shape[0]/self.problem.parameters["xsize"])#JW my ad-hoc new resolution restart
+#                 #solver.state[name].set_scales(1)
+#                 self.solver.state[name]['g'] = subset
+#                 self.solver.state[name].set_scales(scale)
+#
+#     elif isinstance(initial_conditions, str):   # Load data from a file.
+#         # Resume: load the state of the last (merged) state file.
+#         resume = initial_conditions == "resume"
+#         if resume:
+#             initial_conditions = self._get_merged_file("states")
+#         if not initial_conditions.endswith(".h5"):
+#             raise ValueError("'{}' is not an h5 file".format(
+#                                                     initial_conditions))
+#         # Load the data from the specified h5 file into the system.
+#         self.logger.info("Loading initial conditions from {}".format(
+#                                                     initial_conditions))
+#
+#         with h5py.File(initial_conditions, 'r') as infile:
+#             self.dt = infile["scales/timestep"][-1] * .001    # JW: initial dt
+# #                dt = infile["scales/timestep"][-1] * .01    # initial dt
+#             errs = []
+#             tasks = ["T", "Tz", "psi", "psiz", "zeta", "zetaz", "T_", "Tz_", "psi_", "psiz_", "zeta_", "zetaz_"]
+#             if resume:
+#                 self.solver.sim_time = infile["scales/sim_time"][-1]
+#                 niters = infile["scales/iteration"][-1]
+#                 self.solver.initial_iteration = niters
+#                 self.solver.iteration = niters
+#             for name in tasks:
+#                 # Get task data from the h5 file (recording failures).
+#                 try:
+#                     data = infile["tasks/"+name][-1,:,:]
+#                 except KeyError as e:
+#                     errs.append("tasks/"+name)
+#                     continue
+#                 # Determine the chunk belonging to this process.
+#                 chunk = data.shape[1] // SIZE
+#                 subset = data[:,RANK*chunk:(RANK+1)*chunk]
+#                 # Change the corresponding state variable.
+#                 scale = self.solver.state[name]['g'].shape[0] / \
+#                                     self.problem.parameters["xsize"]
+#                 self.solver.state[name].set_scales(data.shape[0]/self.problem.parameters["xsize"])#JW my ad-hoc new resolution restart
+#                 #solver.state[name].set_scales(1)
+#                 self.solver.state[name]['g'] = subset
+#                 self.solver.state[name].set_scales(scale)
+#             if errs:
+#                 raise KeyError("Missing keys in '{}': '{}'".format(
+#                                 initial_conditions, "', '".join(errs)))
+#
+#     # Initial conditions for assimilating system: T_0 = P_4(T0).
+#     # if not resume:
+#     #    G = self.problem.domain.new_field()
+#     #    G['c'] = solver.state['T']['c'].copy()
+#     #    solver.state['T_']['g'] = BoussinesqDataAssimilation2D.P_N(
+#     #                                                        G, 4, True)
+#     #    solver.state['T_'].differentiate('z', out=solver.state['Tz_'])
