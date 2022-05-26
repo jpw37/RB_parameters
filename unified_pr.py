@@ -618,7 +618,8 @@ class RB_2D_PR(RB_2D_DA):
                                   ("Pr + Pr_", 'Pr_est'),
                                   ("Ra + (PrRa_/Pr)", 'Ra_est'),
                                   ("Pr", 'Pr_true'),
-                                  ("Ra", 'Ra_true')
+                                  ("Ra", 'Ra_true'),
+                                  ("sqrt(integ((zeta-zeta_)**2, 'x', 'z'))", "zeta_err")
                                  ]
 
             for task, name in analysis_tasks: self.annals.add_task(task, name=name)
