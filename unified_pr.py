@@ -24,6 +24,7 @@ from functools import partial
 
 # Dedalus imports
 from dedalus import public as de
+from dedalus import core as core
 from dedalus.extras import flow_tools
 from dedalus.core.operators import GeneralFunction
 
@@ -52,6 +53,31 @@ def fdcoeffs_v1(stencil, d):
 
     # solve linear system
     return np.linalg.solve(A, b)
+
+def proj(F, N, return_field=False):
+    """
+    Calculate the Fourier mode projection of F with N terms.
+    """
+    # Evaluate if necessary
+    if type(F) != core.field.Field: F = F.evaluate()
+
+    # Set F scale
+    F.set_scales(1)
+
+    # Get indices
+    X, Y = np.indices(F['c'].shape)
+
+    # Create new field
+    f = F.domain.new_field()
+
+    # Project the low modes (<= N in both directions)
+    f['c'][(X >= N) | (Y >= N)] = F['c'][(X >= N) | (Y >= N)]
+
+    # Return resulting field
+    if return_field:
+        return f
+    else:
+        return f['g']
 
 class RB_2D_PR(RB_2D_DA):
     """
@@ -448,6 +474,45 @@ class RB_2D_PR(RB_2D_DA):
         # Return estimates
         return Pr, self.problem.parameters['Ra']
 
+    def est_Ra_v2(self):
+
+
+        # Save relevant fields
+        proj_zeta_err = proj(self.solver.state['zeta']-self.solver.state['zeta_'], self.N, return_field=True)
+        proj_T_err = proj(self.solver.state['T']-self.solver.state['T_'], self.N, return_field=True)
+        Ih_temp__x = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
+        Ih_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
+        Ih_laplace_temp_ = proj(self.solver.state['T_'].differentiate(x=2) + self.solver.state['T_'].differentiate(z=2), self.N, return_field=True)
+        Ih_u_dot_grad_zeta = proj(-self.solver.state['psi'].differentiate(z=1)*self.solver.state['zeta'].differentiate(x=1) + self.solver.state['psi'].differentiate(x=1)*self.solver.state['zeta'].differentiate(z=1), self.N, return_field=True)
+        Ih_u_dot_grad_zeta_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1), self.N, return_field=True)
+        Ih_u_dot_grad_w = proj(-self.solver.state['psi'].differentiate(z=1)*(self.solver.state['zeta'].differentiate(x=1) - self.solver.state['zeta_'].differentiate(x=1)) + self.solver.state['psi'].differentiate(x=1)*(self.solver.state['zeta'].differentiate(z=1) - self.solver.state['zeta_'].differentiate(z=1)), self.N, return_field=True)
+        Ih_v_dot_grad_zeta_ = proj((-self.solver.state['psi'].differentiate(z=1)+self.solver.state['psi_'].differentiate(z=1))*self.solver.state['zeta_'].differentiate(x=1) + (self.solver.state['psi'].differentiate(x=1)-self.solver.state['psi_'].differentiate(x=1))*self.solver.state['zeta_'].differentiate(z=1), self.N, return_field=True)
+
+        # Calculate relevant quantities
+        a = de.operators.integrate(Ih_u_dot_grad_w * proj_zeta_err)['g'][0,0]
+        b = de.operators.integrate(Ih_v_dot_grad_zeta_ * proj_zeta_err)['g'][0,0]
+        c = de.operators.integrate(proj_T_err.differentiate(x=1) * proj_zeta_err)['g'][0,0]
+        d = de.operators.integrate(Ih_temp__x*proj_zeta_err, 'x', 'z')['g'][0,0]
+        e = de.operators.integrate((proj_zeta_err.differentiate(z=2) + proj_zeta_err.differentiate(x=2))*proj_zeta_err, 'x', 'z')['g'][0,0]
+        f = de.operators.integrate(proj_zeta_err**2, 'x', 'z')['g'][0,0]
+
+        a_ = de.operators.integrate(Ih_u_dot_grad_zeta * proj_zeta_err)['g'][0,0]
+        b_ = de.operators.integrate(Ih_u_dot_grad_zeta_ * proj_zeta_err)['g'][0,0]
+        c_ = de.operators.integrate(Ih_temp_x * proj_zeta_err)['g'][0,0]
+        d_ = de.operators.integrate(Ih_temp__x * proj_zeta_err)['g'][0,0]
+
+        # Current Prandtl number
+        Pr = self.problem.parameters['Pr']
+
+        # Get current Rayleigh estimate
+        Ra_ = self.problem.parameters['Ra'] + (self.problem.parameters['PrRa_'].args[0]/Pr)
+
+        e = 0
+
+        # Get updated Rayleigh estimate
+        return (a_ - b_ + Pr*Ra_*d_ - Pr*e + self.mu*f)/(Pr*c_)
+
+
     def backward_time_derivative(self):
         """
         Calculuate the time derivative of the observed vorticity based off of
@@ -497,7 +562,7 @@ class RB_2D_PR(RB_2D_DA):
         return zeta_t
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=np.inf, stop_iteration=np.inf, tight=False,
-                       save=.05, save_tasks=None, analysis=True, analysis_tasks=None, ic=None, **kwargs):
+                       save=.05, save_tasks=None, analysis=1e-8, analysis_tasks=None, ic=None, **kwargs):
         """
         Load initial conditions, run the simulation, and merge results.
 
@@ -588,7 +653,7 @@ class RB_2D_PR(RB_2D_DA):
             # Save specific tasks in analysis/ files every few iterations.
             self.annals = self.solver.evaluator.add_file_handler(
                                     os.path.join(self.records_dir, "analysis"),
-                                    sim_dt=save, max_writes=73600, mode="append") # iters = 20
+                                    sim_dt=analysis, max_writes=73600, mode="append") # iters = 20
 
 
 
@@ -618,7 +683,8 @@ class RB_2D_PR(RB_2D_DA):
                                   ("Pr + Pr_", 'Pr_est'),
                                   ("Ra + (PrRa_/Pr)", 'Ra_est'),
                                   ("Pr", 'Pr_true'),
-                                  ("Ra", 'Ra_true')
+                                  ("Ra", 'Ra_true'),
+                                  ("sqrt(integ((zeta-zeta_)**2, 'x', 'z'))", "zeta_err")
                                  ]
 
             for task, name in analysis_tasks: self.annals.add_task(task, name=name)
@@ -674,6 +740,8 @@ class RB_2D_PR(RB_2D_DA):
             self.logger.info("Starting simulation")
             start_time = time.time()
 
+            update_time = 0.5
+
             # Iterate
             while self.solver.ok:
 
@@ -699,6 +767,10 @@ class RB_2D_PR(RB_2D_DA):
                     plt.colorbar()
                     plt.axis('off')
                     plt.show()
+
+                # Get parameter update
+                Ra_lin = self.est_Ra_v2()
+                print('Linearized Ra estimate: ', Ra_lin)
 
                 # Update parameters: different on first iteration than subsequent iterations
                 if self.solver.iteration == self.solver.initial_iteration:
@@ -730,6 +802,12 @@ class RB_2D_PR(RB_2D_DA):
 
                     print('relaxed Pr_est: ', Pr_est)
                     print('relaxed Ra_est: ', Ra_est)
+
+                elif self.solver.sim_time > update_time:
+
+                    print('Update applied -----------------------------------------------------')
+                    PrRa_ = self.problem.parameters['Pr']*(Ra_lin - self.problem.parameters['Ra'])
+
 
 
                 # Set parameters
