@@ -808,6 +808,8 @@ class RB_2D_PR(RB_2D_DA):
                     print('Update applied -----------------------------------------------------')
                     PrRa_ = self.problem.parameters['Pr']*(Ra_lin - self.problem.parameters['Ra'])
 
+                    update_time += 0.1
+                    self.dt *= 0.01
 
 
                 # Set parameters
