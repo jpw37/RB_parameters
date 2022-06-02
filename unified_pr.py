@@ -30,7 +30,7 @@ from dedalus.core.operators import GeneralFunction
 
 # Other files
 from base_simulator import BaseSimulator, RANK, SIZE
-from RB_2D import RB_2D, P_N
+from RB_2D import RB_2D
 from unified import RB_2D_DA
 from initial_conditions import *
 
@@ -71,7 +71,7 @@ def proj(F, N, return_field=False):
     f = F.domain.new_field()
 
     # Project the low modes (<= N in both directions)
-    f['c'][(X >= N) | (Y >= N)] = F['c'][(X >= N) | (Y >= N)]
+    f['c'][(X <= N) | (Y <= N)] = F['c'][(X <= N) | (Y <= N)]
 
     # Return resulting field
     if return_field:
@@ -88,7 +88,7 @@ class RB_2D_PR(RB_2D_DA):
     def __init__(self, L=4., xsize=384, zsize=192, Prandtl=1., Rayleigh=1e6,
                  mu=1000., N=8, BCs="no-slip", Pr_guess=1., Ra_guess=1e6,
                  alpha=1., PrRa_RHS=False, nudge_T=False,
-                 zeta_projection=P_N, T_projection=None, **kwargs):
+                 zeta_projection=proj, T_projection=None, **kwargs):
         """
         Set up the systems of equations as a dedalus Initial Value Problem,
         without defining initial conditions.
@@ -179,7 +179,7 @@ class RB_2D_PR(RB_2D_DA):
         self.N = N
 
         # GeneralFunction for driving
-        self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', P_N, args=[])
+        self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', proj, args=[])
 
         # Parameter estimation
         self.problem.parameters['Pr_'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
@@ -245,8 +245,8 @@ class RB_2D_PR(RB_2D_DA):
         self.solver.state['zeta_'].set_scales(3/2)
 
         # Projections of true state
-        proj_zeta = P_N(self.solver.state['zeta'], self.N)
-        proj_T = P_N(self.solver.state['T'], self.N)
+        proj_zeta = proj(self.solver.state['zeta'], self.N)
+        proj_T = proj(self.solver.state['T'], self.N)
 
         # Get backward time derivative
         zeta_t = self.backward_time_derivative()
@@ -255,23 +255,23 @@ class RB_2D_PR(RB_2D_DA):
         # set up the alpha_i coefficients
         Ih_laplace_zeta_ = self.problem.domain.new_field()
         Ih_laplace_zeta_.set_scales(3/2)
-        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
+        Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
 
         # set up the beta_i coefficients
         Ih_temp_x_ = self.problem.domain.new_field()
         Ih_temp_x_.set_scales(3/2)
-        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
+        Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
 
         # set up the gamma_i coefficients
         Ih_remainder_ = self.problem.domain.new_field()
         Ih_remainder_.set_scales(3/2)
         # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
+        Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
 
         # Set e1 to be the projection of the error, guaranteeing exponential decay of the error
         e1 = self.problem.domain.new_field()
         e1.set_scales(3/2)
-        e1['g'] = proj_zeta - P_N(self.solver.state['zeta_'], self.N)
+        e1['g'] = proj_zeta - proj(self.solver.state['zeta_'], self.N)
 
         # Normalize
         e1['g'] /= np.sqrt(de.operators.integrate(e1**2, 'x', 'z')['g'][0,0])
@@ -322,8 +322,8 @@ class RB_2D_PR(RB_2D_DA):
         self.solver.state['zeta_'].set_scales(3/2)
 
         # Projections of true state and assimilating state
-        proj_zeta = P_N(self.solver.state['zeta'], self.N)
-        proj_zeta_ = P_N(self.solver.state['zeta_'], self.N)
+        proj_zeta = proj(self.solver.state['zeta'], self.N)
+        proj_zeta_ = proj(self.solver.state['zeta_'], self.N)
 
         # Find the projected error
         proj_error = self.problem.domain.new_field()
@@ -337,18 +337,18 @@ class RB_2D_PR(RB_2D_DA):
         # set up coefficient on Pr
         Ih_laplace_zeta_ = self.problem.domain.new_field()
         Ih_laplace_zeta_.set_scales(3/2)
-        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
+        Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
 
         # set up coefficient on PrRa
         Ih_temp_x_ = self.problem.domain.new_field()
         Ih_temp_x_.set_scales(3/2)
-        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
+        Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
 
         # set up other coefficient
         Ih_remainder_ = self.problem.domain.new_field()
         Ih_remainder_.set_scales(3/2)
         # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
+        Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
 
         # Set up important constants
         a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
@@ -384,8 +384,8 @@ class RB_2D_PR(RB_2D_DA):
         self.solver.state['zeta_'].set_scales(3/2)
 
         # Projections of true state and assimilating state
-        proj_zeta = P_N(self.solver.state['zeta'], self.N)
-        proj_zeta_ = P_N(self.solver.state['zeta_'], self.N)
+        proj_zeta = proj(self.solver.state['zeta'], self.N)
+        proj_zeta_ = proj(self.solver.state['zeta_'], self.N)
 
         # Find the projected error
         proj_error = self.problem.domain.new_field()
@@ -399,18 +399,18 @@ class RB_2D_PR(RB_2D_DA):
         # set up coefficient on Pr
         Ih_laplace_zeta_ = self.problem.domain.new_field()
         Ih_laplace_zeta_.set_scales(3/2)
-        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
+        Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
 
         # set up coefficient on PrRa
         Ih_temp_x_ = self.problem.domain.new_field()
         Ih_temp_x_.set_scales(3/2)
-        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
+        Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
 
         # set up other coefficient
         Ih_remainder_ = self.problem.domain.new_field()
         Ih_remainder_.set_scales(3/2)
         # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
+        Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
 
         # Set up important constants
         a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
@@ -436,8 +436,8 @@ class RB_2D_PR(RB_2D_DA):
         self.solver.state['zeta_'].set_scales(3/2)
 
         # Projections of true state and assimilating state
-        proj_zeta = P_N(self.solver.state['zeta'], self.N)
-        proj_zeta_ = P_N(self.solver.state['zeta_'], self.N)
+        proj_zeta = proj(self.solver.state['zeta'], self.N)
+        proj_zeta_ = proj(self.solver.state['zeta_'], self.N)
 
         # Find the projected error
         proj_error = self.problem.domain.new_field()
@@ -451,18 +451,18 @@ class RB_2D_PR(RB_2D_DA):
         # set up coefficient on Pr
         Ih_laplace_zeta_ = self.problem.domain.new_field()
         Ih_laplace_zeta_.set_scales(3/2)
-        Ih_laplace_zeta_['g'] = P_N(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
+        Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
 
         # set up coefficient on PrRa
         Ih_temp_x_ = self.problem.domain.new_field()
         Ih_temp_x_.set_scales(3/2)
-        Ih_temp_x_['g'] = P_N(self.solver.state['T_'].differentiate(x=1),self.N)
+        Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
 
         # set up other coefficient
         Ih_remainder_ = self.problem.domain.new_field()
         Ih_remainder_.set_scales(3/2)
         # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = P_N(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
+        Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
 
         # Set up important constants
         a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
@@ -479,6 +479,7 @@ class RB_2D_PR(RB_2D_DA):
 
         # Save relevant fields
         proj_zeta_err = proj(self.solver.state['zeta']-self.solver.state['zeta_'], self.N, return_field=True)
+        proj_zeta_laplace_err = proj(test.solver.state['zeta'].differentiate(z=2) + test.solver.state['zeta'].differentiate(x=2) - test.solver.state['zeta_'].differentiate(z=2) - test.solver.state['zeta_'].differentiate(x=2), test.N, return_field=True)
         proj_T_err = proj(self.solver.state['T']-self.solver.state['T_'], self.N, return_field=True)
         Ih_temp__x = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
         Ih_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
@@ -493,7 +494,7 @@ class RB_2D_PR(RB_2D_DA):
         b = de.operators.integrate(Ih_v_dot_grad_zeta_ * proj_zeta_err)['g'][0,0]
         c = de.operators.integrate(proj_T_err.differentiate(x=1) * proj_zeta_err)['g'][0,0]
         d = de.operators.integrate(Ih_temp__x*proj_zeta_err, 'x', 'z')['g'][0,0]
-        e = de.operators.integrate((proj_zeta_err.differentiate(z=2) + proj_zeta_err.differentiate(x=2))*proj_zeta_err, 'x', 'z')['g'][0,0]
+        e = de.operators.integrate(proj_zeta_laplace_err*proj_zeta_err, 'x', 'z')['g'][0,0]
         f = de.operators.integrate(proj_zeta_err**2, 'x', 'z')['g'][0,0]
 
         a_ = de.operators.integrate(Ih_u_dot_grad_zeta * proj_zeta_err)['g'][0,0]
@@ -506,8 +507,6 @@ class RB_2D_PR(RB_2D_DA):
 
         # Get current Rayleigh estimate
         Ra_ = self.problem.parameters['Ra'] + (self.problem.parameters['PrRa_'].args[0]/Pr)
-
-        e = 0
 
         # Get updated Rayleigh estimate
         return (a_ - b_ + Pr*Ra_*d_ - Pr*e + self.mu*f)/(Pr*c_)
@@ -673,7 +672,7 @@ class RB_2D_PR(RB_2D_DA):
                                   ("sqrt( integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z'))", "gradu_L2"),
                                   ("sqrt( integ(dx(dx(T))**2 + dx(dz(T))**2 + dz(dz(T))**2, 'x', 'z'))", "T_h2"),
                                   ("sqrt(integ( dx(dx(v))**2 + dz(dz(v))**2 + dx(dz(v))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2"),
-                                  ("P_N( zeta )", "Proj"),
+                                  ("proj( zeta )", "Proj"),
                                   ("sqrt(integ((T-T_)**2, 'x', 'z'))", "T_err"),
                                   ("sqrt(integ(dx(T-T_)**2+dz(T-T_)**2, 'x', 'z'))", "gradT_err"),
                                   ("sqrt(integ((v-v_)**2 + (w-w_)**2, 'x', 'z'))", "u_err"),
@@ -1062,7 +1061,7 @@ class RB_2D_PR(RB_2D_DA):
             print("Extracting data...", end='', flush=True)
             T = data["tasks/T"]
             T_ = data["tasks/T_"]
-            # dT = data["tasks/P_N"]
+            # dT = data["tasks/proj"]
             times = list(data["scales/sim_time"])
             assert len(times) == len(T) == len(T_), "mismatched dimensions"
             print("done")
@@ -1272,6 +1271,6 @@ class RB_2D_PR(RB_2D_DA):
 #     # if not resume:
 #     #    G = self.problem.domain.new_field()
 #     #    G['c'] = solver.state['T']['c'].copy()
-#     #    solver.state['T_']['g'] = BoussinesqDataAssimilation2D.P_N(
+#     #    solver.state['T_']['g'] = BoussinesqDataAssimilation2D.proj(
 #     #                                                        G, 4, True)
 #     #    solver.state['T_'].differentiate('z', out=solver.state['Tz_'])
