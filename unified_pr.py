@@ -77,6 +77,7 @@ def proj(F, N, return_field=False):
     if return_field:
         return f
     else:
+        f.set_scales(3/2)
         return f['g']
 
 class RB_2D_PR(RB_2D_DA):
@@ -241,8 +242,8 @@ class RB_2D_PR(RB_2D_DA):
         """
 
         # Set scales
-        self.solver.state['zeta'].set_scales(3/2)
-        self.solver.state['zeta_'].set_scales(3/2)
+        self.solver.state['zeta'].set_scales(1)
+        self.solver.state['zeta_'].set_scales(1)
 
         # Projections of true state
         proj_zeta = proj(self.solver.state['zeta'], self.N)
@@ -250,27 +251,27 @@ class RB_2D_PR(RB_2D_DA):
 
         # Get backward time derivative
         zeta_t = self.backward_time_derivative()
-        zeta_t.set_scales(3/2)
+        zeta_t.set_scales(1)
 
         # set up the alpha_i coefficients
         Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(3/2)
+        Ih_laplace_zeta_.set_scales(1)
         Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
 
         # set up the beta_i coefficients
         Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(3/2)
+        Ih_temp_x_.set_scales(1)
         Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
 
         # set up the gamma_i coefficients
         Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(3/2)
+        Ih_remainder_.set_scales(1)
         # v = -psi_z, w = psi_x
         Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
 
         # Set e1 to be the projection of the error, guaranteeing exponential decay of the error
         e1 = self.problem.domain.new_field()
-        e1.set_scales(3/2)
+        e1.set_scales(1)
         e1['g'] = proj_zeta - proj(self.solver.state['zeta_'], self.N)
 
         # Normalize
@@ -278,7 +279,7 @@ class RB_2D_PR(RB_2D_DA):
 
         # Many choices are possible for e2
         e2 = self.problem.domain.new_field()
-        e2.set_scales(3/2)
+        e2.set_scales(1)
         e2['g'] = Ih_temp_x_['g']
 
         # Another possibility (to guarantee decay of error in H1)
@@ -318,8 +319,8 @@ class RB_2D_PR(RB_2D_DA):
         """
 
         # Set scales
-        self.solver.state['zeta'].set_scales(3/2)
-        self.solver.state['zeta_'].set_scales(3/2)
+        self.solver.state['zeta'].set_scales(1)
+        self.solver.state['zeta_'].set_scales(1)
 
         # Projections of true state and assimilating state
         proj_zeta = proj(self.solver.state['zeta'], self.N)
@@ -327,26 +328,26 @@ class RB_2D_PR(RB_2D_DA):
 
         # Find the projected error
         proj_error = self.problem.domain.new_field()
-        proj_error.set_scales(3/2)
+        proj_error.set_scales(1)
         proj_error['g'] = proj_zeta - proj_zeta_
 
         # Get backward time derivative
         zeta_t = self.backward_time_derivative()
-        zeta_t.set_scales(3/2)
+        zeta_t.set_scales(1)
 
         # set up coefficient on Pr
         Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(3/2)
+        Ih_laplace_zeta_.set_scales(1)
         Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
 
         # set up coefficient on PrRa
         Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(3/2)
+        Ih_temp_x_.set_scales(1)
         Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
 
         # set up other coefficient
         Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(3/2)
+        Ih_remainder_.set_scales(1)
         # v = -psi_z, w = psi_x
         Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
 
@@ -380,8 +381,8 @@ class RB_2D_PR(RB_2D_DA):
         """
 
         # Set scales
-        self.solver.state['zeta'].set_scales(3/2)
-        self.solver.state['zeta_'].set_scales(3/2)
+        self.solver.state['zeta'].set_scales(1)
+        self.solver.state['zeta_'].set_scales(1)
 
         # Projections of true state and assimilating state
         proj_zeta = proj(self.solver.state['zeta'], self.N)
@@ -389,26 +390,26 @@ class RB_2D_PR(RB_2D_DA):
 
         # Find the projected error
         proj_error = self.problem.domain.new_field()
-        proj_error.set_scales(3/2)
+        proj_error.set_scales(1)
         proj_error['g'] = proj_zeta - proj_zeta_
 
         # Get backward time derivative
         zeta_t = self.backward_time_derivative()
-        zeta_t.set_scales(3/2)
+        zeta_t.set_scales(1)
 
         # set up coefficient on Pr
         Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(3/2)
+        Ih_laplace_zeta_.set_scales(1)
         Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
 
         # set up coefficient on PrRa
         Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(3/2)
+        Ih_temp_x_.set_scales(1)
         Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
 
         # set up other coefficient
         Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(3/2)
+        Ih_remainder_.set_scales(1)
         # v = -psi_z, w = psi_x
         Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
 
@@ -432,8 +433,8 @@ class RB_2D_PR(RB_2D_DA):
         """
 
         # Set scales
-        self.solver.state['zeta'].set_scales(3/2)
-        self.solver.state['zeta_'].set_scales(3/2)
+        self.solver.state['zeta'].set_scales(1)
+        self.solver.state['zeta_'].set_scales(1)
 
         # Projections of true state and assimilating state
         proj_zeta = proj(self.solver.state['zeta'], self.N)
@@ -441,26 +442,26 @@ class RB_2D_PR(RB_2D_DA):
 
         # Find the projected error
         proj_error = self.problem.domain.new_field()
-        proj_error.set_scales(3/2)
+        proj_error.set_scales(1)
         proj_error['g'] = proj_zeta - proj_zeta_
 
         # Get backward time derivative
         zeta_t = self.backward_time_derivative()
-        zeta_t.set_scales(3/2)
+        zeta_t.set_scales(1)
 
         # set up coefficient on Pr
         Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(3/2)
+        Ih_laplace_zeta_.set_scales(1)
         Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
 
         # set up coefficient on PrRa
         Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(3/2)
+        Ih_temp_x_.set_scales(1)
         Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
 
         # set up other coefficient
         Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(3/2)
+        Ih_remainder_.set_scales(1)
         # v = -psi_z, w = psi_x
         Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
 
@@ -541,10 +542,10 @@ class RB_2D_PR(RB_2D_DA):
             zeta_t = self.problem.domain.new_field()
 
             # Make sure scales are set
-            zeta_t.set_scales(3/2)
-            self.solver.state['zeta_'].set_scales(3/2)
-            self.prev_state[-1].set_scales(3/2)
-            self.prev_state[-2].set_scales(3/2)
+            zeta_t.set_scales(1)
+            self.solver.state['zeta_'].set_scales(1)
+            self.prev_state[-1].set_scales(1)
+            self.prev_state[-2].set_scales(1)
 
             # Calculate finite difference coefficients
             c2, c1, c0 = fdcoeffs_v1([-self.dt_hist[-2]-self.dt_hist[-1], -self.dt_hist[-1], 0], 1)
@@ -555,7 +556,7 @@ class RB_2D_PR(RB_2D_DA):
             # Calculate
             zeta_t['g'] = c0*self.solver.state['zeta_']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
 
-            zeta_t.set_scales(3/2)
+            zeta_t.set_scales(1)
 
         print(zeta_t['g'])
         return zeta_t
@@ -841,6 +842,7 @@ class RB_2D_PR(RB_2D_DA):
                 self.prev_state.pop(0)
                 self.dt_hist.append(self.dt)
                 self.dt_hist.pop(0)
+
 
                 # Step
                 self.solver.step(self.dt)
