@@ -479,7 +479,7 @@ class RB_2D_PR(RB_2D_DA):
 
         # Save relevant fields
         proj_zeta_err = proj(self.solver.state['zeta']-self.solver.state['zeta_'], self.N, return_field=True)
-        proj_zeta_laplace_err = proj(test.solver.state['zeta'].differentiate(z=2) + test.solver.state['zeta'].differentiate(x=2) - test.solver.state['zeta_'].differentiate(z=2) - test.solver.state['zeta_'].differentiate(x=2), test.N, return_field=True)
+        proj_zeta_laplace_err = proj(self.solver.state['zeta'].differentiate(z=2) + self.solver.state['zeta'].differentiate(x=2) - self.solver.state['zeta_'].differentiate(z=2) - self.solver.state['zeta_'].differentiate(x=2), self.N, return_field=True)
         proj_T_err = proj(self.solver.state['T']-self.solver.state['T_'], self.N, return_field=True)
         Ih_temp__x = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
         Ih_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
@@ -747,7 +747,7 @@ class RB_2D_PR(RB_2D_DA):
                 # Use CFL condition to compute time step
                 self.dt = self.cfl.compute_dt()
 
-                if self.solver.iteration != self.solver.initial_iteration:
+                if self.solver.iteration != self.solver.iteration:
 
                     print(f'Entering iteration {self.solver.iteration}; dt = {self.dt};, time = {self.solver.sim_time}')
 
@@ -768,8 +768,9 @@ class RB_2D_PR(RB_2D_DA):
                     plt.show()
 
                 # Get parameter update
-                Ra_lin = self.est_Ra_v2()
-                print('Linearized Ra estimate: ', Ra_lin)
+                if self.solver.iteration > 0:
+                    Ra_lin = self.est_Ra_v2()
+                    if RANK == 0: print('Linearized Ra estimate: ', Ra_lin)
 
                 # Update parameters: different on first iteration than subsequent iterations
                 if self.solver.iteration == self.solver.initial_iteration:
@@ -817,8 +818,8 @@ class RB_2D_PR(RB_2D_DA):
                 self.problem.parameters['Pr_'].args = [Pr_]
                 self.problem.parameters['PrRa_'].args = [PrRa_]
 
-                print('Pr_error: ', self.problem.parameters['Pr_'].args[0])
-                print('PrRa_error: ', self.problem.parameters['PrRa_'].args[0])
+                #print('Pr_error: ', self.problem.parameters['Pr_'].args[0])
+                #print('PrRa_error: ', self.problem.parameters['PrRa_'].args[0])
 
                 # Get projection of difference between assimilating state and true state
                 self.zeta = self.solver.state['zeta']
