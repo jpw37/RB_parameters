@@ -169,7 +169,7 @@ def temperature_sine_wave(vertical_periods=1, horizontal_periods=2, magnitude=0.
     return states
 
 
-def start_from(filename='most recent', set_time=False, timestep_reduction=1, pattern="RB_2D_[!ap]*"):
+def start_from(filename='most recent', set_time=False, timestep_reduction=1, start_point=-1, pattern="RB_2D_[!ap]*"):
 
     if filename == 'most recent':
 
@@ -186,7 +186,8 @@ def start_from(filename='most recent', set_time=False, timestep_reduction=1, pat
 
         for i, var in enumerate(list(infile['tasks'].keys())):
 
-            data = infile['tasks/'+var][-1, :, :]
+            data = infile['tasks/'+var][start_point, :, :]
+            print(data.shape)
 
             # Determine the chunk belonging to this process.
             # chunk = data.shape[1] // SIZE
@@ -198,11 +199,11 @@ def start_from(filename='most recent', set_time=False, timestep_reduction=1, pat
             ic.set_state(var, data)
 
         # Record timestep
-        ic.set_metadata('timestep', infile["scales/timestep"][-1]*timestep_reduction)
+        ic.set_metadata('timestep', infile["scales/timestep"][start_point]*timestep_reduction)
 
         # Reset counters if necessary
         if set_time:
-            ic.set_metadata('iteration', infile["scales/iteration"][-1])
-            ic.set_metadata('sim_time', infile["scales/sim_time"][-1])
+            ic.set_metadata('iteration', infile["scales/iteration"][start_point])
+            ic.set_metadata('sim_time', infile["scales/sim_time"][start_point])
 
     return ic

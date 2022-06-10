@@ -384,39 +384,27 @@ class RB_2D_PR(RB_2D_DA):
         self.solver.state['zeta'].set_scales(1)
         self.solver.state['zeta_'].set_scales(1)
 
-        # Projections of true state and assimilating state
-        proj_zeta = proj(self.solver.state['zeta'], self.N)
-        proj_zeta_ = proj(self.solver.state['zeta_'], self.N)
-
-        # Find the projected error
-        proj_error = self.problem.domain.new_field()
-        proj_error.set_scales(1)
-        proj_error['g'] = proj_zeta - proj_zeta_
+        # Projection of zeta error
+        proj_zeta_err = proj(self.solver.state['zeta']-self.solver.state['zeta_'], self.N, return_field=True)
 
         # Get backward time derivative
         zeta_t = self.backward_time_derivative()
         zeta_t.set_scales(1)
 
         # set up coefficient on Pr
-        Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(1)
-        Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
+        Ih_laplace_zeta_ = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N, return_field=True)
 
         # set up coefficient on PrRa
-        Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(1)
-        Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
+        Ih_temp_x_ = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
 
         # set up other coefficient
-        Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(1)
         # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
+        Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
         # Set up important constants
-        a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
-        b = de.operators.integrate(proj_error*Ih_temp_x_, 'x', 'z')['g'][0,0]
-        c = de.operators.integrate(proj_error*Ih_remainder_, 'x', 'z')['g'][0,0]
+        a = de.operators.integrate(proj_zeta_err*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
+        b = de.operators.integrate(proj_zeta_err*Ih_temp_x_, 'x', 'z')['g'][0,0]
+        c = de.operators.integrate(proj_zeta_err*Ih_remainder_, 'x', 'z')['g'][0,0]
 
         PrRa = (c - a*self.problem.parameters['Pr'])/b
 
@@ -740,6 +728,8 @@ class RB_2D_PR(RB_2D_DA):
             start_time = time.time()
 
             update_time = 0.5
+            alg = 'continuous'
+
 
             # Iterate
             while self.solver.ok:
@@ -747,7 +737,8 @@ class RB_2D_PR(RB_2D_DA):
                 # Use CFL condition to compute time step
                 self.dt = self.cfl.compute_dt()
 
-                if self.solver.iteration != self.solver.iteration:
+                # Print updates
+                if (self.solver.iteration != self.solver.initial_iteration):
 
                     print(f'Entering iteration {self.solver.iteration}; dt = {self.dt};, time = {self.solver.sim_time}')
 
@@ -757,20 +748,13 @@ class RB_2D_PR(RB_2D_DA):
                     plt.axis('off')
                     plt.show()
 
-                    print(self.solver.state['zeta']['g'])
-
-
-
                     plt.imshow(np.rot90(self.solver.state['zeta_']['g']), cmap='cividis')
                     plt.title(f'Assimilating state at iteration {self.solver.iteration}')
                     plt.colorbar()
                     plt.axis('off')
                     plt.show()
 
-                # Get parameter update
-                if self.solver.iteration > 0:
-                    Ra_lin = self.est_Ra_v2()
-                    if RANK == 0: print('Linearized Ra estimate: ', Ra_lin)
+                    print('Current Error: ', np.sqrt(de.operators.integrate((self.solver.state['zeta']-self.solver.state['zeta_'])**2)['g'][0,0]))
 
                 # Update parameters: different on first iteration than subsequent iterations
                 if self.solver.iteration == self.solver.initial_iteration:
@@ -779,8 +763,8 @@ class RB_2D_PR(RB_2D_DA):
                     Pr_ = self.Pr_guess - self.problem.parameters['Pr']
                     PrRa_ = self.Pr_guess * self.Ra_guess - self.problem.parameters['Pr']*self.problem.parameters['Ra']
 
-                #elif self.solver.sim_time > 0.1:
-                elif self.solver.iteration > np.inf:
+                elif (self.solver.iteration > self.solver.initial_iteration+20) and alg == 'continuous':
+                #elif self.solver.iteration > np.inf:
 
                     # Start with the old estimates
                     Pr_est = self.problem.parameters['Pr'] + self.problem.parameters['Pr_'].args[0]
@@ -803,13 +787,18 @@ class RB_2D_PR(RB_2D_DA):
                     print('relaxed Pr_est: ', Pr_est)
                     print('relaxed Ra_est: ', Ra_est)
 
-                elif self.solver.sim_time > update_time:
+                elif alg == 'linearized':
 
-                    print('Update applied -----------------------------------------------------')
-                    PrRa_ = self.problem.parameters['Pr']*(Ra_lin - self.problem.parameters['Ra'])
+                    Ra_lin = self.est_Ra_v2()
+                    if RANK == 0: print('Linearized Ra estimate: ', Ra_lin)
 
-                    update_time += 0.1
-                    self.dt *= 0.01
+                    if self.solver.sim_time > update_time:
+
+                        print('Update applied -----------------------------------------------------')
+                        PrRa_ = self.problem.parameters['Pr']*(Ra_lin - self.problem.parameters['Ra'])
+
+                        update_time += 0.1
+                        self.dt *= 0.01
 
 
                 # Set parameters
@@ -817,9 +806,6 @@ class RB_2D_PR(RB_2D_DA):
                 self.problem.parameters['PrRa_'].original_args = [PrRa_]
                 self.problem.parameters['Pr_'].args = [Pr_]
                 self.problem.parameters['PrRa_'].args = [PrRa_]
-
-                #print('Pr_error: ', self.problem.parameters['Pr_'].args[0])
-                #print('PrRa_error: ', self.problem.parameters['PrRa_'].args[0])
 
                 # Get projection of difference between assimilating state and true state
                 self.zeta = self.solver.state['zeta']
@@ -842,7 +828,6 @@ class RB_2D_PR(RB_2D_DA):
                 self.prev_state.pop(0)
                 self.dt_hist.append(self.dt)
                 self.dt_hist.pop(0)
-
 
                 # Step
                 self.solver.step(self.dt)
