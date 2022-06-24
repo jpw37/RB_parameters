@@ -759,7 +759,7 @@ class RB_2D_PR(RB_2D_DA):
 
                     if RANK==0: print('Current Error: ', np.sqrt(de.operators.integrate((self.solver.state['zeta']-self.solver.state['zeta_'])**2)['g'][0,0]))
 
-                if (self.solver.iteration > self.solver.initial_iteration) and alg == 'continuous':
+                if (self.solver.iteration > self.solver.initial_iteration) and alg == 'continuous' and self.solver.sim_time > update_time:
                 #elif self.solver.iteration > np.inf:
 
                     # Start with the old estimates
