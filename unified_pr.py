@@ -88,7 +88,7 @@ class RB_2D_PR(RB_2D_DA):
 
     def __init__(self, L=4., xsize=384, zsize=192, Prandtl=1., Rayleigh=1e6,
                  mu=1000., N=8, BCs="no-slip", Pr_guess=1., Ra_guess=1e6,
-                 alpha=1., PrRa_RHS=False, nudge_T=False,
+                 alpha=1., PrRa_RHS=False, nudge_T=False, verbose=False,
                  zeta_projection=proj, T_projection=None, **kwargs):
         """
         Set up the systems of equations as a dedalus Initial Value Problem,
@@ -118,6 +118,7 @@ class RB_2D_PR(RB_2D_DA):
         # Create an instance of the BaseSimulator class
         BaseSimulator.__init__(self, **kwargs)
         self.logger.info("BaseSimulator constructed")
+        self.verbose = verbose
 
         # Initialize domains
         x_basis = de.Fourier('x', xsize, interval=(0, L), dealias=3/2)
@@ -531,15 +532,15 @@ class RB_2D_PR(RB_2D_DA):
             # Calculate finite difference coefficients
             c2, c1, c0 = fdcoeffs_v1([-self.dt_hist[-2]-self.dt_hist[-1], -self.dt_hist[-1], 0], 1)
 
-            print('Last two time steps: ', 'dt = '+str(self.dt_hist[-2]), 'dt = '+str(self.dt_hist[-1]))
-            print('Backwards finite difference coefficients: ', f'c2 = {c2}', f'c1 = {c1}', f'c0 = {c0}')
+            if verbose: print('Last two time steps: ', 'dt = '+str(self.dt_hist[-2]), 'dt = '+str(self.dt_hist[-1]))
+            if verbose: print('Backwards finite difference coefficients: ', f'c2 = {c2}', f'c1 = {c1}', f'c0 = {c0}')
 
             # Calculate
             zeta_t['g'] = c0*self.solver.state['zeta_']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
 
             zeta_t.set_scales(1)
 
-        print(zeta_t['g'])
+        if verbose: print(zeta_t['g'])
         return zeta_t
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=np.inf, stop_iteration=np.inf, tight=False,
@@ -715,7 +716,7 @@ class RB_2D_PR(RB_2D_DA):
         # Set a flag
         self.solver_setup = True
 
-    def run_simulation(self):
+    def run_simulation(self, alg='continuous', delay_time=0.1, show_plots=False, verbose=False):
         """
         Runs the simulation defined in self.setup_simulation, and then merges
         the results using self.merge_results.
@@ -729,9 +730,7 @@ class RB_2D_PR(RB_2D_DA):
             # Start the counter
             self.logger.info("Starting simulation")
             start_time = time.time()
-
-            update_time = 0.5
-            alg = 'continuous'
+            update_time = delay_time
 
 
             # Iterate
@@ -743,21 +742,22 @@ class RB_2D_PR(RB_2D_DA):
                 # Print updates
                 if (self.solver.iteration != self.solver.initial_iteration):
 
-                    print(f'Entering iteration {self.solver.iteration}; dt = {self.dt};, time = {self.solver.sim_time}')
+                    if RANK==0: print(f'Entering iteration {self.solver.iteration}; dt = {self.dt};, time = {self.solver.sim_time}')
 
-                    plt.imshow(np.rot90(self.solver.state['zeta']['g']), cmap='cividis')
-                    plt.title(f'True state at iteration {self.solver.iteration}')
-                    plt.colorbar()
-                    plt.axis('off')
-                    plt.show()
+                    if show_plots:
+                        plt.imshow(np.rot90(self.solver.state['zeta']['g']), cmap='cividis')
+                        plt.title(f'True state at iteration {self.solver.iteration}')
+                        plt.colorbar()
+                        plt.axis('off')
+                        plt.show()
 
-                    plt.imshow(np.rot90(self.solver.state['zeta_']['g']), cmap='cividis')
-                    plt.title(f'Assimilating state at iteration {self.solver.iteration}')
-                    plt.colorbar()
-                    plt.axis('off')
-                    plt.show()
+                        plt.imshow(np.rot90(self.solver.state['zeta_']['g']), cmap='cividis')
+                        plt.title(f'Assimilating state at iteration {self.solver.iteration}')
+                        plt.colorbar()
+                        plt.axis('off')
+                        plt.show()
 
-                    print('Current Error: ', np.sqrt(de.operators.integrate((self.solver.state['zeta']-self.solver.state['zeta_'])**2)['g'][0,0]))
+                    if RANK==0: print('Current Error: ', np.sqrt(de.operators.integrate((self.solver.state['zeta']-self.solver.state['zeta_'])**2)['g'][0,0]))
 
                 if (self.solver.iteration > self.solver.initial_iteration) and alg == 'continuous':
                 #elif self.solver.iteration > np.inf:
@@ -777,11 +777,11 @@ class RB_2D_PR(RB_2D_DA):
                     Pr_ = Pr_est - self.problem.parameters['Pr']
                     PrRa_ = Pr_est*Ra_est - self.problem.parameters['Pr']*self.problem.parameters['Ra']
 
-                    print('new Pr_est: ', new_Pr_est)
-                    print('new Ra_est: ', new_Ra_est)
+                    if RANK==0: print('new Pr_est: ', new_Pr_est)
+                    if RANK==0: print('new Ra_est: ', new_Ra_est)
 
-                    print('relaxed Pr_est: ', Pr_est)
-                    print('relaxed Ra_est: ', Ra_est)
+                    if RANK==0: print('relaxed Pr_est: ', Pr_est)
+                    if RANK==0: print('relaxed Ra_est: ', Ra_est)
 
                     self.problem.parameters['Pr_'].original_args = [Pr_]
                     self.problem.parameters['PrRa_'].original_args = [PrRa_]
@@ -795,7 +795,7 @@ class RB_2D_PR(RB_2D_DA):
 
                     if self.solver.sim_time > update_time:
 
-                        print('Update applied -----------------------------------------------------')
+                        if RANK==0: print('Update applied -----------------------------------------------------')
                         PrRa_ = self.problem.parameters['Pr']*(Ra_lin - self.problem.parameters['Ra'])
 
                         update_time += 0.1
