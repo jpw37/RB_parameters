@@ -206,15 +206,8 @@ class RB_2D_PR(RB_2D_DA):
         self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz) = - v*dx(T) - w*Tz")
 
         # Nudging equations
-        if PrRa_RHS:
-            self.problem.add_equation("dt(zeta_) = -v_*dx(zeta_) - w_*zetaz_  + PrRa_*dx(T_) + Pr_*(dx(dx(zeta_)) + dz(zetaz_)) + mu*driving ")
-        else:
-            self.problem.add_equation("Pr*(Ra*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - PrRa_*dx(T_) - Pr_*(dx(dx(zeta_)) + dz(zetaz_))")
-
-        if nudge_T:
-            pass
-        else:
-            self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
+        self.problem.add_equation("Pr*(Ra*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - PrRa_*dx(T_) - Pr_*(dx(dx(zeta_)) + dz(zetaz_))")
+        self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
 
     def const_val(self, value, return_field=False):
         """
@@ -704,6 +697,16 @@ class RB_2D_PR(RB_2D_DA):
         self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
         self.problem.parameters["driving"].args = [self.dzeta, self.N]
 
+        # Use inital guess
+        Pr_ = self.Pr_guess - self.problem.parameters['Pr']
+        PrRa_ = self.Pr_guess * self.Ra_guess - self.problem.parameters['Pr']*self.problem.parameters['Ra']
+
+        # Set parameters
+        self.problem.parameters['Pr_'].original_args = [Pr_]
+        self.problem.parameters['PrRa_'].original_args = [PrRa_]
+        self.problem.parameters['Pr_'].args = [Pr_]
+        self.problem.parameters['PrRa_'].args = [PrRa_]
+
         # Set solver attributes
         self.solver.stop_sim_time = sim_time
         self.solver.stop_wall_time = wall_time
@@ -756,14 +759,7 @@ class RB_2D_PR(RB_2D_DA):
 
                     print('Current Error: ', np.sqrt(de.operators.integrate((self.solver.state['zeta']-self.solver.state['zeta_'])**2)['g'][0,0]))
 
-                # Update parameters: different on first iteration than subsequent iterations
-                if self.solver.iteration == self.solver.initial_iteration:
-
-                    # Use inital guess
-                    Pr_ = self.Pr_guess - self.problem.parameters['Pr']
-                    PrRa_ = self.Pr_guess * self.Ra_guess - self.problem.parameters['Pr']*self.problem.parameters['Ra']
-
-                elif (self.solver.iteration > self.solver.initial_iteration+20) and alg == 'continuous':
+                if (self.solver.iteration > self.solver.initial_iteration) and alg == 'continuous':
                 #elif self.solver.iteration > np.inf:
 
                     # Start with the old estimates
@@ -787,7 +783,12 @@ class RB_2D_PR(RB_2D_DA):
                     print('relaxed Pr_est: ', Pr_est)
                     print('relaxed Ra_est: ', Ra_est)
 
-                elif alg == 'linearized':
+                    self.problem.parameters['Pr_'].original_args = [Pr_]
+                    self.problem.parameters['PrRa_'].original_args = [PrRa_]
+                    self.problem.parameters['Pr_'].args = [Pr_]
+                    self.problem.parameters['PrRa_'].args = [PrRa_]
+
+                if alg == 'linearized':
 
                     Ra_lin = self.est_Ra_v2()
                     if RANK == 0: print('Linearized Ra estimate: ', Ra_lin)
@@ -800,12 +801,11 @@ class RB_2D_PR(RB_2D_DA):
                         update_time += 0.1
                         self.dt *= 0.01
 
+                        self.problem.parameters['Pr_'].original_args = [Pr_]
+                        self.problem.parameters['PrRa_'].original_args = [PrRa_]
+                        self.problem.parameters['Pr_'].args = [Pr_]
+                        self.problem.parameters['PrRa_'].args = [PrRa_]
 
-                # Set parameters
-                self.problem.parameters['Pr_'].original_args = [Pr_]
-                self.problem.parameters['PrRa_'].original_args = [PrRa_]
-                self.problem.parameters['Pr_'].args = [Pr_]
-                self.problem.parameters['PrRa_'].args = [PrRa_]
 
                 # Get projection of difference between assimilating state and true state
                 self.zeta = self.solver.state['zeta']
