@@ -3,6 +3,7 @@ from mpi4py import MPI
 import h5py
 import os
 import glob
+from unified_pr import proj
 
 RANK = MPI.COMM_WORLD.rank        # Which process this is running on
 SIZE = MPI.COMM_WORLD.size
@@ -196,6 +197,47 @@ def start_from(filename='most recent', set_time=False, timestep_reduction=1, sta
             if i == 0: ic = Resume(data.shape, list(infile['tasks'].keys()))
 
             ic.set_state(var, data)
+
+        # Record timestep
+        ic.set_metadata('timestep', infile["scales/timestep"][start_point]*timestep_reduction)
+
+        # Reset counters if necessary
+        if set_time:
+            ic.set_metadata('iteration', infile["scales/iteration"][start_point])
+            ic.set_metadata('sim_time', infile["scales/sim_time"][start_point])
+
+    return ic
+
+def start_from_true(filename='most recent', set_time=False, timestep_reduction=1, start_point=-1, pattern="RB_2D_[!ap]*", N=4):
+
+    if filename == 'most recent':
+
+        # get list of files that matches pattern
+        files = list(glob.glob(pattern))
+
+        # sort by modified time
+        files.sort(key=lambda x: os.path.getmtime(x))
+
+        # get last item in list
+        filename = files[-1] + '/states/states.h5'
+
+    with h5py.File(filename, 'r') as infile:
+
+        for i, var in enumerate(list(infile['tasks'].keys())):
+
+            if var[-1] != '_':
+
+                data = infile['tasks/'+var][start_point, :, :]
+
+                # Determine the chunk belonging to this process.
+                # chunk = data.shape[1] // SIZE
+                # subset = data[:,RANK*chunk:(RANK+1)*chunk]
+
+                # Initialize resume object (if first iteration)
+                if i == 0: ic = Resume(data.shape, list(infile['tasks'].keys()))
+
+                ic.set_state(var, data)
+                ic.set_state(var+'_', data)
 
         # Record timestep
         ic.set_metadata('timestep', infile["scales/timestep"][start_point]*timestep_reduction)

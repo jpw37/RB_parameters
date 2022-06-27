@@ -108,12 +108,6 @@ class RB_2D_PR(RB_2D_DA):
             N (int): the number of modes to keep in the Fourier projection
             BCs (str): if 'no-slip', use the no-slip BCs u(z=0,1) = 0.
                 If 'free-slip', use the free-slip BCs u_z(z=0,1) = 0.
-            PrRa_RHS (bool): if true, puts the Pr and Ra terms on the right hand
-                side of the evolution equations. If not, formulates the estimated
-                Pr and Ra as true value + error (with true on LHS, error on RHS)
-            nudge_T (bool): if true, use nudging on the temperature variable as
-                well (not implemented yet)
-
         """
         # Create an instance of the BaseSimulator class
         BaseSimulator.__init__(self, **kwargs)
@@ -260,7 +254,7 @@ class RB_2D_PR(RB_2D_DA):
             coefficient_field.set_scales(3/2)
             return coefficient_field['g']
 
-    def new_params(self):
+    def est_continuous_original(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -337,7 +331,7 @@ class RB_2D_PR(RB_2D_DA):
         Pr, PrRa = np.linalg.solve(A,b)
         return float(Pr), float(PrRa/Pr)
 
-    def new_params2(self):
+    def est_continuous_regularized(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -399,7 +393,7 @@ class RB_2D_PR(RB_2D_DA):
         # Return estimates
         return float(Pr), float(PrRa/Pr)
 
-    def est_Ra(self):
+    def est_Ra_continuous(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -439,7 +433,7 @@ class RB_2D_PR(RB_2D_DA):
         # Return estimates
         return self.problem.parameters['Pr'], PrRa/self.problem.parameters['Pr']
 
-    def est_Pr(self):
+    def est_Pr_continuous(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -491,7 +485,7 @@ class RB_2D_PR(RB_2D_DA):
         # Return estimates
         return Pr, self.problem.parameters['Ra']
 
-    def est_Ra_v2(self):
+    def est_Ra_discrete(self):
 
 
         # Save relevant fields
@@ -519,14 +513,11 @@ class RB_2D_PR(RB_2D_DA):
         c_ = de.operators.integrate(Ih_temp_x * proj_zeta_err)['g'][0,0]
         d_ = de.operators.integrate(Ih_temp__x * proj_zeta_err)['g'][0,0]
 
-        # Current Prandtl number
-        Pr = self.problem.parameters['Pr']
-
         # Get current Rayleigh estimate
-        Ra_ = self.problem.parameters['Ra'] + (self.problem.parameters['PrRa_'].args[0]/Pr)
+        Pr_, Ra_ = self.get_parameters()
 
         # Get updated Rayleigh estimate
-        return (a_ - b_ + Pr*Ra_*d_ - Pr*e + self.mu*f)/(Pr*c_)
+        return self.problem.parameters['Pr'], (a_ - b_ + Pr_*Ra_*d_ - Pr_*e + self.mu*f)/(Pr_*c_)
 
 
     def backward_time_derivative(self):
@@ -541,18 +532,6 @@ class RB_2D_PR(RB_2D_DA):
             zeta_t = self.const_val(0., return_field=True)
 
         else:
-            dt = self.dt_hist
-            dt_ratio = dt[-1]/dt[-2]
-            dt_diff = dt[-1]-dt[-2]
-            dt_sum = dt[-1]+dt[-2]
-
-            # Now to set up the coefficients of the finite differencing
-            c0 = - (dt_diff*(dt[-1]**2 + dt_sum**2))/(dt[-1]*dt[-2])
-            c1 = (dt_diff*dt_sum**2)/(dt[-1]*dt[-2])
-            c2 = dt_ratio*dt_diff
-
-            #Now using these coefficients we compute a 2nd order backward difference
-            #approximation to the derivative of the vorticity
             zeta_t = self.problem.domain.new_field()
 
             # Make sure scales are set
@@ -576,7 +555,7 @@ class RB_2D_PR(RB_2D_DA):
         return zeta_t
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=np.inf, stop_iteration=np.inf, tight=False,
-                       save=.05, save_tasks=None, analysis=1e-8, analysis_tasks=None, ic=None, **kwargs):
+                       save=.05, save_tasks=None, project_assim=0, analysis=1e-8, analysis_tasks=None, ic=None, **kwargs):
         """
         Load initial conditions, run the simulation, and merge results.
 
@@ -647,6 +626,12 @@ class RB_2D_PR(RB_2D_DA):
             self.solver.state[name].set_scales(data.shape[0]/self.problem.parameters["xsize"])
             self.solver.state[name]['g'] = subset
 
+        if project_assim:
+
+            for var in ['T_', 'Tz_', 'psi_', 'psiz_', 'zeta_', 'zetaz_']:
+
+                self.solver.state[var]['g'] = proj(self.solver.state[var], project_assim, return_field=True)['g']
+
         # State snapshots -----------------------------------------------------
         if save:
 
@@ -693,8 +678,8 @@ class RB_2D_PR(RB_2D_DA):
                                   ("sqrt(integ(dx(v-v_)**2 + dz(v-v_)**2 + dx(w-w_)**2 + dz(w-w_)**2, 'x', 'z'))", "gradu_err"),
                                   ("sqrt( integ(dx(dx(T-T_))**2 + dx(dz(T-T_))**2 + dz(dz(T-T_))**2, 'x', 'z'))", "T_h2_err"),
                                   ("sqrt(integ( dx(dx(v-v_))**2 + dz(dz(v-v_))**2 + dx(dz(v-v_))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2_err"),
-                                  ("Pr + Pr_", 'Pr_est'),
-                                  ("Ra + (PrRa_/Pr)", 'Ra_est'),
+                                  ("Pr_guess + Pr_error", 'Pr_est'),
+                                  ("Ra_guess + Ra_error", 'Ra_est'),
                                   ("Pr", 'Pr_true'),
                                   ("Ra", 'Ra_true'),
                                   ("sqrt(integ((zeta-zeta_)**2, 'x', 'z'))", "zeta_err")
@@ -764,6 +749,13 @@ class RB_2D_PR(RB_2D_DA):
             self.problem.parameters["driving_T"].original_args = [self.dT, self.N]
             self.problem.parameters["driving_T"].args = [self.dT, self.N]
 
+    def get_parameters(self):
+
+        Pr_est = self.problem.parameters['Pr_guess'] + self.problem.parameters['Pr_error'].args[0]
+        Ra_est = self.problem.parameters['Ra_guess'] + self.problem.parameters['Ra_error'].args[0]
+
+        return Pr_est, Ra_est
+
     def update_parameters(self, Pr_est, Ra_est):
 
         Pr_error = Pr_est - self.problem.parameters['Pr_guess']
@@ -815,14 +807,15 @@ class RB_2D_PR(RB_2D_DA):
                 #elif self.solver.iteration > np.inf:
 
                     # Start with the old estimates
-                    Pr_est = self.problem.parameters['Pr_guess'] + self.problem.parameters['Pr_error'].args[0]
-                    Ra_est = self.problem.parameters['Ra_guess'] + self.problem.parameters['Ra_error'].args[0]
+                    Pr_est, Ra_est = self.get_parameters()
 
                     # Get update (key place)
                     if Ra_only:
-                        new_Pr_est, new_Ra_est = self.est_Ra()
+                        new_Pr_est, new_Ra_est = self.est_Ra_continuous()
                     else:
-                        pass
+                        new_Pr_est, new_Ra_est = self.est_continuous_regularized()
+
+
                     if RANK==0: print('new Pr_est: ', new_Pr_est)
                     if RANK==0: print('new Ra_est: ', new_Ra_est)
 
@@ -838,16 +831,13 @@ class RB_2D_PR(RB_2D_DA):
                 if alg == 'discrete':
 
                     if Ra_only:
-                        Ra_est = self.est_Ra_v2()
-                        Pr_est = self.problem.parameters['Pr'] # use the true value
+                        Pr_est, Ra_est = self.est_Ra_discrete()
                     else:
                         pass
 
                     if RANK == 0: print('Ra estimate: ', Ra_est)
 
                     if self.solver.sim_time > update_time:
-
-                        PrRa_ = Ra_est - self.problem.parameters['Ra'])
 
                         # Update update time
                         update_time += 0.1
