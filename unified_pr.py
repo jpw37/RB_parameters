@@ -88,7 +88,7 @@ class RB_2D_PR(RB_2D_DA):
 
     def __init__(self, L=4., xsize=384, zsize=192, Prandtl=1., Rayleigh=1e6,
                  mu=1000., N=8, BCs="no-slip", Pr_guess=1., Ra_guess=1e6,
-                 alpha=1., PrRa_RHS=False, nudge_T=False, verbose=False,
+                 alpha=1., formulation=0, verbose=False,
                  zeta_projection=proj, T_projection=None, **kwargs):
         """
         Set up the systems of equations as a dedalus Initial Value Problem,
@@ -119,6 +119,7 @@ class RB_2D_PR(RB_2D_DA):
         BaseSimulator.__init__(self, **kwargs)
         self.logger.info("BaseSimulator constructed")
         self.verbose = verbose
+        self.formulation = formulation
 
         # Initialize domains
         x_basis = de.Fourier('x', xsize, interval=(0, L), dealias=3/2)
@@ -141,7 +142,7 @@ class RB_2D_PR(RB_2D_DA):
         self.logger.info("Auxiliary equations and BCs set up")
 
         # Initialize evolution equations
-        self.setup_evolution(PrRa_RHS=PrRa_RHS, nudge_T=nudge_T)
+        self.setup_evolution()
         self.logger.info("Evolution equations constructed")
 
         # Save system parameters in JSON format.
@@ -173,6 +174,8 @@ class RB_2D_PR(RB_2D_DA):
         # Fluid parameters
         self.problem.parameters['Ra'] = Rayleigh
         self.problem.parameters['Pr'] = Prandtl
+        self.problem.parameters['Ra_guess'] = Ra_guess
+        self.problem.parameters['Pr_guess'] = Pr_guess
 
         # Driving parameters
         self.problem.parameters['mu'] = mu
@@ -183,11 +186,16 @@ class RB_2D_PR(RB_2D_DA):
         # GeneralFunction for driving
         self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', proj, args=[])
 
+        # Additional parameters necessary for formulation 1
+        if self.formulation == 1:
+            self.problem.parameters['mu_T'] = mu_T
+            self.problem.parameters["driving_T"] = GeneralFunction(self.problem.domain, 'g', proj, args=[])
+
         # Parameter estimation
-        self.problem.parameters['Pr_'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
-        self.problem.parameters['PrRa_'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
-        self.Pr_guess = Pr_guess
-        self.Ra_guess = Ra_guess
+        self.problem.parameters['Pr_error'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
+        self.problem.parameters['Ra_error'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
+        #self.Pr_guess = Pr_guess
+        #self.Ra_guess = Ra_guess
 
         # Need to initialize the previous 2 states and corresponding time steps
         self.prev_state = [None] * 2
@@ -196,19 +204,45 @@ class RB_2D_PR(RB_2D_DA):
         # Relaxation coefficient
         self.alpha = alpha
 
-    def setup_evolution(self, PrRa_RHS, nudge_T):
+    def setup_evolution(self):
         """
         Set up the Boussinesq evolution equation and nudging equation for
         data assimilation.
         """
 
-        # Boussinesq evolution equations
-        self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz))  - dt(zeta) = v*dx(zeta) + w*zetaz")
-        self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz) = - v*dx(T) - w*Tz")
+        if self.formulation == 0:
 
-        # Nudging equations
-        self.problem.add_equation("Pr*(Ra*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - PrRa_*dx(T_) - Pr_*(dx(dx(zeta_)) + dz(zetaz_))")
-        self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
+            # The standard formulation of the equations, with the following scales:
+            # length: h
+            # time: h^2/kappa
+            # temperature: d theta
+            # pressure: rho kappa^2/h^2
+            # velocity: kappa/h
+
+            # Boussinesq evolution equations
+            self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz))  - dt(zeta) = v*dx(zeta) + w*zetaz")
+            self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz) = - v*dx(T) - w*Tz")
+
+            # Nudging equations
+            self.problem.add_equation("Pr_guess*(Ra_guess*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - Pr_error*(dx(dx(zeta_)) + dz(zetaz_)) - (Pr_guess*Ra_error + Pr_error*Ra_guess + Pr_error*Ra_error)*dx(T_)")
+            self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
+
+        elif self.formulation == 1:
+
+            # Different nondimensionalization, which separates Pr and Ra into separate equations
+            # length: h
+            # time: h^2/nu
+            # temperature: Pr d theta
+            # pressure: rho nu^2/h^2
+            # velocity: nu/h
+
+            # Boussinesq evolution equations
+            self.problem.add_equation("Pr*(Ra*dx(T) + dx(dx(zeta)) + dz(zetaz))  - dt(zeta) = v*dx(zeta) + w*zetaz")
+            self.problem.add_equation("dt(T) - dx(dx(T)) - dz(Tz) = - v*dx(T) - w*Tz")
+
+            # Nudging equations
+            self.problem.add_equation("Ra_guess*dx(T_) + dx(dx(zeta_)) + dz(zetaz_) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - Ra_error*dx(T_)")
+            self.problem.add_equation("dt(T_) - (1/Pr_guess)(dx(dx(T_)) + dz(Tz_)) = -v_*dx(T_) - w_*Tz_ + mu_T*driving_T - (Pr_error/(Pr_guess*(Pr_error + Pr_guess)))*(dx(dx(T_)) + dz(Tz_))")
 
     def const_val(self, value, return_field=False):
         """
@@ -502,8 +536,6 @@ class RB_2D_PR(RB_2D_DA):
         in the main document.
         """
 
-        ### NOTE: Use projection of true state.
-
         if None in self.dt_hist:
             # There may be a better way to do this.  Right now zeta_t=0 for the first 2 time steps
             zeta_t = self.const_val(0., return_field=True)
@@ -532,15 +564,15 @@ class RB_2D_PR(RB_2D_DA):
             # Calculate finite difference coefficients
             c2, c1, c0 = fdcoeffs_v1([-self.dt_hist[-2]-self.dt_hist[-1], -self.dt_hist[-1], 0], 1)
 
-            if verbose: print('Last two time steps: ', 'dt = '+str(self.dt_hist[-2]), 'dt = '+str(self.dt_hist[-1]))
-            if verbose: print('Backwards finite difference coefficients: ', f'c2 = {c2}', f'c1 = {c1}', f'c0 = {c0}')
+            if self.verbose: print('Last two time steps: ', 'dt = '+str(self.dt_hist[-2]), 'dt = '+str(self.dt_hist[-1]))
+            if self.verbose: print('Backwards finite difference coefficients: ', f'c2 = {c2}', f'c1 = {c1}', f'c0 = {c0}')
 
             # Calculate
             zeta_t['g'] = c0*self.solver.state['zeta_']['g'] + c1*self.prev_state[-1]['g'] + c2*self.prev_state[-2]['g']
 
             zeta_t.set_scales(1)
 
-        if verbose: print(zeta_t['g'])
+        if self.verbose: print(zeta_t['g'])
         return zeta_t
 
     def setup_simulation(self, scheme=de.timesteppers.RK443, sim_time=0.15, wall_time=np.inf, stop_iteration=np.inf, tight=False,
@@ -686,7 +718,29 @@ class RB_2D_PR(RB_2D_DA):
         self.flow = flow_tools.GlobalFlowProperty(self.solver, cadence=1)
         self.flow.add_property("sqrt(v **2 + w **2) / Ra", name='Re' )
 
-        # Define args for driving parameter
+        # Update driving
+        self.update_driving()
+
+        # Update Parameters; initially using our guess
+        self.update_parameters(self.problem.parameters['Pr_guess'], self.problem.parameters['Ra_guess'])
+
+        # Set parameters; initially assuming our guess is correct
+        self.problem.parameters['Pr_error'].original_args = [0.]
+        self.problem.parameters['Ra_error'].original_args = [0.]
+        self.problem.parameters['Pr_error'].args = [0.]
+        self.problem.parameters['Ra_error'].args = [0.]
+
+        # Set solver attributes
+        self.solver.stop_sim_time = sim_time
+        self.solver.stop_wall_time = wall_time
+        self.solver.stop_iteration = stop_iteration
+
+        # Set a flag
+        self.solver_setup = True
+
+    def update_driving(self):
+
+        # Get projection of difference between assimilating state and true state
         self.zeta = self.solver.state['zeta']
         self.zeta.set_scales(1)
         self.zeta_ = self.solver.state['zeta_']
@@ -698,25 +752,28 @@ class RB_2D_PR(RB_2D_DA):
         self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
         self.problem.parameters["driving"].args = [self.dzeta, self.N]
 
-        # Use inital guess
-        Pr_ = self.Pr_guess - self.problem.parameters['Pr']
-        PrRa_ = self.Pr_guess * self.Ra_guess - self.problem.parameters['Pr']*self.problem.parameters['Ra']
+        if self.formulation == 1:
+            self.T = self.solver.state['T']
+            self.T.set_scales(1)
+            self.T_ = self.solver.state['T_']
+            self.T_.set_scales(1)
+            self.dT = self.problem.domain.new_field(name='dT')
+            self.dT['g'] = self.T['g'] - self.T_['g']
 
-        # Set parameters
-        self.problem.parameters['Pr_'].original_args = [Pr_]
-        self.problem.parameters['PrRa_'].original_args = [PrRa_]
-        self.problem.parameters['Pr_'].args = [Pr_]
-        self.problem.parameters['PrRa_'].args = [PrRa_]
+            # Substitute this projection for the "driving_T" parameter in the assimilating system
+            self.problem.parameters["driving_T"].original_args = [self.dT, self.N]
+            self.problem.parameters["driving_T"].args = [self.dT, self.N]
 
-        # Set solver attributes
-        self.solver.stop_sim_time = sim_time
-        self.solver.stop_wall_time = wall_time
-        self.solver.stop_iteration = stop_iteration
+    def update_parameters(self, Pr_est, Ra_est):
 
-        # Set a flag
-        self.solver_setup = True
+        Pr_error = Pr_est - self.problem.parameters['Pr_guess']
+        Ra_error = Ra_est - self.problem.parameters['Ra_guess']
+        self.problem.parameters['Pr_error'].original_args = [Pr_error]
+        self.problem.parameters['Ra_error'].original_args = [Ra_error]
+        self.problem.parameters['Pr_error'].args = [Pr_error]
+        self.problem.parameters['Ra_error'].args = [Ra_error]
 
-    def run_simulation(self, alg='continuous', delay_time=0.1, show_plots=False, verbose=False):
+    def run_simulation(self, alg='continuous', Ra_only=True, delay_time=0.1, show_plots=False, verbose=False):
         """
         Runs the simulation defined in self.setup_simulation, and then merges
         the results using self.merge_results.
@@ -732,7 +789,6 @@ class RB_2D_PR(RB_2D_DA):
             start_time = time.time()
             update_time = delay_time
 
-
             # Iterate
             while self.solver.ok:
 
@@ -740,97 +796,79 @@ class RB_2D_PR(RB_2D_DA):
                 self.dt = self.cfl.compute_dt()
 
                 # Print updates
-                if (self.solver.iteration != self.solver.initial_iteration):
+                if RANK==0: print(f'Entering iteration {self.solver.iteration}; dt = {self.dt};, time = {self.solver.sim_time}')
+                if RANK==0: print('Current Error: ', np.sqrt(de.operators.integrate((self.solver.state['zeta']-self.solver.state['zeta_'])**2)['g'][0,0]))
+                if show_plots:
+                    plt.imshow(np.rot90(self.solver.state['zeta']['g']), cmap='cividis')
+                    plt.title(f'True state at iteration {self.solver.iteration}')
+                    plt.colorbar()
+                    plt.axis('off')
+                    plt.show()
 
-                    if RANK==0: print(f'Entering iteration {self.solver.iteration}; dt = {self.dt};, time = {self.solver.sim_time}')
-
-                    if show_plots:
-                        plt.imshow(np.rot90(self.solver.state['zeta']['g']), cmap='cividis')
-                        plt.title(f'True state at iteration {self.solver.iteration}')
-                        plt.colorbar()
-                        plt.axis('off')
-                        plt.show()
-
-                        plt.imshow(np.rot90(self.solver.state['zeta_']['g']), cmap='cividis')
-                        plt.title(f'Assimilating state at iteration {self.solver.iteration}')
-                        plt.colorbar()
-                        plt.axis('off')
-                        plt.show()
-
-                    if RANK==0: print('Current Error: ', np.sqrt(de.operators.integrate((self.solver.state['zeta']-self.solver.state['zeta_'])**2)['g'][0,0]))
+                    plt.imshow(np.rot90(self.solver.state['zeta_']['g']), cmap='cividis')
+                    plt.title(f'Assimilating state at iteration {self.solver.iteration}')
+                    plt.colorbar()
+                    plt.axis('off')
+                    plt.show()
 
                 if (self.solver.iteration > self.solver.initial_iteration) and alg == 'continuous' and self.solver.sim_time > update_time:
                 #elif self.solver.iteration > np.inf:
 
                     # Start with the old estimates
-                    Pr_est = self.problem.parameters['Pr'] + self.problem.parameters['Pr_'].args[0]
-                    Ra_est = (self.problem.parameters['Pr']*self.problem.parameters['Ra'] + self.problem.parameters['PrRa_'].args[0])/Pr_est
+                    Pr_est = self.problem.parameters['Pr_guess'] + self.problem.parameters['Pr_error'].args[0]
+                    Ra_est = self.problem.parameters['Ra_guess'] + self.problem.parameters['Ra_error'].args[0]
 
                     # Get update (key place)
-                    new_Pr_est, new_Ra_est = self.est_Ra()
+                    if Ra_only:
+                        new_Pr_est, new_Ra_est = self.est_Ra()
+                    else:
+                        pass
+                    if RANK==0: print('new Pr_est: ', new_Pr_est)
+                    if RANK==0: print('new Ra_est: ', new_Ra_est)
 
                     # Crank-Nicholson integration for relaxation
                     Pr_est = ((1 - 0.5*self.alpha*self.dt)*Pr_est + self.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.alpha*self.dt)
                     Ra_est = ((1 - 0.5*self.alpha*self.dt)*Ra_est + self.alpha*self.dt*new_Ra_est)/(1 + 0.5*self.alpha*self.dt)
-
-                    # Calculate parameters which should be used
-                    Pr_ = Pr_est - self.problem.parameters['Pr']
-                    PrRa_ = Pr_est*Ra_est - self.problem.parameters['Pr']*self.problem.parameters['Ra']
-
-                    if RANK==0: print('new Pr_est: ', new_Pr_est)
-                    if RANK==0: print('new Ra_est: ', new_Ra_est)
-
                     if RANK==0: print('relaxed Pr_est: ', Pr_est)
                     if RANK==0: print('relaxed Ra_est: ', Ra_est)
 
-                    self.problem.parameters['Pr_'].original_args = [Pr_]
-                    self.problem.parameters['PrRa_'].original_args = [PrRa_]
-                    self.problem.parameters['Pr_'].args = [Pr_]
-                    self.problem.parameters['PrRa_'].args = [PrRa_]
+                    # Calculate parameters which should be used
+                    self.update_parameters(Pr_est, Ra_est)
 
-                if alg == 'linearized':
+                if alg == 'discrete':
 
-                    Ra_lin = self.est_Ra_v2()
-                    if RANK == 0: print('Linearized Ra estimate: ', Ra_lin)
+                    if Ra_only:
+                        Ra_est = self.est_Ra_v2()
+                        Pr_est = self.problem.parameters['Pr'] # use the true value
+                    else:
+                        pass
+
+                    if RANK == 0: print('Ra estimate: ', Ra_est)
 
                     if self.solver.sim_time > update_time:
 
-                        if RANK==0: print('Update applied -----------------------------------------------------')
-                        PrRa_ = self.problem.parameters['Pr']*(Ra_lin - self.problem.parameters['Ra'])
+                        PrRa_ = Ra_est - self.problem.parameters['Ra'])
 
+                        # Update update time
                         update_time += 0.1
+
+                        # There might be a large jump in parameters; reduce time step to be safe
                         self.dt *= 0.01
 
-                        self.problem.parameters['Pr_'].original_args = [Pr_]
-                        self.problem.parameters['PrRa_'].original_args = [PrRa_]
-                        self.problem.parameters['Pr_'].args = [Pr_]
-                        self.problem.parameters['PrRa_'].args = [PrRa_]
+                        # Calculate parameters which should be used
+                        self.update_parameters(Pr_est, Ra_est)
+                        if RANK==0: print('Discrete update applied')
 
+                self.update_driving()
 
-                # Get projection of difference between assimilating state and true state
-                self.zeta = self.solver.state['zeta']
-                self.zeta.set_scales(1)
-
-                # assimilating state
-                self.zeta_ = self.solver.state['zeta_']
-                self.zeta_.set_scales(1)
-
-                # Get projection of difference between assimilating state and true state
-                self.dzeta = self.problem.domain.new_field(name='dzeta')
-                self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
-
-                # Substitute this projection for the "driving" parameter in the assimilating system
-                self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
-                self.problem.parameters["driving"].args = [self.dzeta, self.N]
+                # Step
+                self.solver.step(self.dt)
 
                 # Record state and dt
                 self.prev_state.append(self.solver.state['zeta_'])
                 self.prev_state.pop(0)
                 self.dt_hist.append(self.dt)
                 self.dt_hist.pop(0)
-
-                # Step
-                self.solver.step(self.dt)
 
                 # Record properties every tenth iteration
                 if self.solver.iteration % 10 == 0:

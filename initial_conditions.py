@@ -187,7 +187,6 @@ def start_from(filename='most recent', set_time=False, timestep_reduction=1, sta
         for i, var in enumerate(list(infile['tasks'].keys())):
 
             data = infile['tasks/'+var][start_point, :, :]
-            print(data.shape)
 
             # Determine the chunk belonging to this process.
             # chunk = data.shape[1] // SIZE
