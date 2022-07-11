@@ -363,13 +363,10 @@ class RB_2D_PR(RB_2D_DA):
         Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
         # Set e1 and e2 to be the projections of the first and second nonlinear terms in the nudged system
-        e1 = Ih_laplace_zeta_
+        e1 = Ih_laplace_zeta_/np.sqrt(de.operators.integrate(Ih_laplace_zeta_**2, 'x', 'z')['g'][0,0])
         e2 = Ih_temp_x_
 
-        # Normalize e1
-        e1['g'] /= np.sqrt(de.operators.integrate(e1**2, 'x', 'z')['g'])
-
-        #Perform modified Gram-Schmidt on e1 and e2 (no need to normalize)
+        # Perform modified Gram-Schmidt on e1 and e2 (no need to normalize)
         c = de.operators.integrate(e1*e2,'x','z')['g']*e1['g']
         e2['g'] = e2['g'] - c
 
@@ -423,14 +420,11 @@ class RB_2D_PR(RB_2D_DA):
         Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
         # Set e1 to be the projection of the term on Pr (assuming Ra is known)
-        e1 = Ih_laplace_zeta_ + self.problem.parameters['Ra']*Ih_temp_x_
-
-        # Normalize e1
-        e1['g'] /= np.sqrt(de.operators.integrate(e1**2, 'x', 'z')['g'][0,0])
+        e1 = (Ih_laplace_zeta_ + self.problem.parameters['Ra']*Ih_temp_x_)/np.sqrt(de.operators.integrate((Ih_laplace_zeta_ + self.problem.parameters['Ra']*Ih_temp_x_)**2, 'x', 'z')['g'][0,0])
 
         gamma1 = de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
 
-        return gamma1, self.problem.parameters['Ra']*gamma1
+        return gamma1, self.problem.parameters['Ra']
 
     def est_Ra_new(self):
         """
@@ -459,10 +453,7 @@ class RB_2D_PR(RB_2D_DA):
         Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
         # Set e1 and e2 to be the projections of the first and second nonlinear terms in the nudged system
-        e1 = Ih_temp_x_
-
-        # Normalize e1
-        e1['g'] /= np.sqrt(de.operators.integrate(e1**2, 'x', 'z')['g'][0,0])
+        e1 = Ih_temp_x_ / np.sqrt(de.operators.integrate(Ih_temp_x_**2, 'x', 'z')['g'][0,0])
 
         gamma1 = de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
 
@@ -632,7 +623,7 @@ class RB_2D_PR(RB_2D_DA):
         Ih_temp__x = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
         Ih_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
         Ih_laplace_temp_ = proj(self.solver.state['T_'].differentiate(x=2) + self.solver.state['T_'].differentiate(z=2), self.N, return_field=True)
-    
+
         Ih_u_dot_grad_zeta = proj(proj(-self.solver.state['psi'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True)
         Ih_u_dot_grad_zeta_ = proj(proj(-self.solver.state['psi_'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi_'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True)
 
@@ -1007,7 +998,7 @@ class RB_2D_PR(RB_2D_DA):
                     self.update_parameters(Pr_est, Ra_est)
 
                 if 'discrete' in alg:
-                        
+
                     if alg == 'discrete_Ra_CHL':
                         Pr_est, Ra_est = self.est_Ra_discrete()
 
@@ -1016,7 +1007,7 @@ class RB_2D_PR(RB_2D_DA):
 
                     elif alg == 'discrete_PWM_new':
                         Pr_est, Ra_est = self.est_PWM_new()
-                        
+
                     elif alg == 'discrete_PWM_Prandtl':
                         Pr_est, Ra_est = self.est_Pr_new()
 
