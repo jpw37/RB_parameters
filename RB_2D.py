@@ -510,8 +510,8 @@ class RB_2D(BaseSimulator):
             self.logger.info("Run time: {:.3e} cpu-hr".format(cpu_hr))
             self.logger.debug("END OF SIMULATION")
 
-        # Merge the results files
-        #self.merge_results()
+            # Merge the results files
+            self.merge_results()
 
     def _get_merged_file(self, label):
         """Return the name of the oldest merged (full or partial) h5 file with

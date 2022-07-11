@@ -3,7 +3,6 @@ from mpi4py import MPI
 import h5py
 import os
 import glob
-from unified_pr import proj
 
 RANK = MPI.COMM_WORLD.rank        # Which process this is running on
 SIZE = MPI.COMM_WORLD.size
