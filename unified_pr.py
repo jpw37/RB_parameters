@@ -388,6 +388,8 @@ class RB_2D_PR(RB_2D_DA):
         b = np.array([[gamma1], [gamma2]])
 
         Pr, PrRa = np.linalg.solve(A,b)
+
+        print(float(Pr), float(PrRa/Pr))
         return float(Pr), float(PrRa/Pr)
 
     def est_Pr_new(self):
