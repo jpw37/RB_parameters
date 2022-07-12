@@ -182,7 +182,6 @@ class RB_2D_PR(RB_2D_DA):
 
         # Additional parameters necessary for formulation 1
         if self.formulation == 1:
-            self.problem.parameters['mu_T'] = mu_T
             self.problem.parameters["driving_T"] = GeneralFunction(self.problem.domain, 'g', proj, args=[])
 
         # Parameter estimation
@@ -237,7 +236,7 @@ class RB_2D_PR(RB_2D_DA):
 
             # Nudging equations
             self.problem.add_equation("Ra_guess*dx(T_) + dx(dx(zeta_)) + dz(zetaz_) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - Ra_error*dx(T_)")
-            self.problem.add_equation("dt(T_) - (1/Pr_guess)(dx(dx(T_)) + dz(Tz_)) = -v_*dx(T_) - w_*Tz_ + mu_T*driving_T - (Pr_error/(Pr_guess*(Pr_error + Pr_guess)))*(dx(dx(T_)) + dz(Tz_))")
+            self.problem.add_equation("dt(T_) - (1/Pr_guess)(dx(dx(T_)) + dz(Tz_)) = -v_*dx(T_) - w_*Tz_ + mu*driving_T - (Pr_error/(Pr_guess*(Pr_error + Pr_guess)))*(dx(dx(T_)) + dz(Tz_))")
 
     def const_val(self, value, return_field=False):
         """
@@ -387,6 +386,10 @@ class RB_2D_PR(RB_2D_DA):
         A = np.array([[alpha1, beta1], [alpha2, beta2]])
         b = np.array([[gamma1], [gamma2]])
 
+        print('Matrix: ', A)
+        print('determinant: ', np.linalg.det(A))
+        print('vector: ', b)
+
         Pr, PrRa = np.linalg.solve(A,b)
         return float(Pr), float(PrRa/Pr)
 
@@ -420,11 +423,11 @@ class RB_2D_PR(RB_2D_DA):
         Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
         # Set e1 to be the projection of the term on Pr (assuming Ra is known)
-        e1 = (Ih_laplace_zeta_ + self.problem.parameters['Ra']*Ih_temp_x_)/np.sqrt(de.operators.integrate((Ih_laplace_zeta_ + self.problem.parameters['Ra']*Ih_temp_x_)**2, 'x', 'z')['g'][0,0])
+        e1 = Ih_laplace_zeta_ + self.problem.parameters['Ra']*Ih_temp_x_
 
         gamma1 = de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
 
-        return gamma1, self.problem.parameters['Ra']
+        return gamma1/de.operators.integrate((Ih_laplace_zeta_ + self.problem.parameters['Ra']*Ih_temp_x_)**2, 'x', 'z')['g'][0,0], self.problem.parameters['Ra']
 
     def est_Ra_new(self):
         """
@@ -446,18 +449,22 @@ class RB_2D_PR(RB_2D_DA):
         zeta_t = self.backward_time_derivative()
         zeta_t.set_scales(1)
 
+        # Set up linear coefficient
+        Ih_laplace_zeta_ = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N, return_field=True)
+
         # set up coefficient on Ra
-        Ih_temp_x_ = self.problem.parameters['Pr']*proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
+        Ih_temp_x_ = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
 
         # set up other coefficient
         Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
         # Set e1 and e2 to be the projections of the first and second nonlinear terms in the nudged system
-        e1 = Ih_temp_x_ / np.sqrt(de.operators.integrate(Ih_temp_x_**2, 'x', 'z')['g'][0,0])
+        e1 = Ih_temp_x_
 
+        alpha1 = de.operators.integrate(e1*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
         gamma1 = de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
 
-        return self.problem.parameters['Pr'], gamma1
+        return self.problem.parameters['Pr'], ((gamma1/self.problem.parameters['Pr']) - alpha1)/de.operators.integrate(Ih_temp_x_**2, 'x', 'z')['g'][0,0]
 
     def est_continuous_regularized(self):
         """
