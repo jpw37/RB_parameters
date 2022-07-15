@@ -87,9 +87,8 @@ class RB_2D_PR(RB_2D_DA):
     """
 
     def __init__(self, L=4., xsize=384, zsize=192, Prandtl=1., Rayleigh=1e6,
-                 mu=1000., N=8, BCs="no-slip", Pr_guess=1., Ra_guess=1e6,
-                 alpha=1., formulation=0, verbose=False,
-                 zeta_projection=proj, T_projection=None, **kwargs):
+                 mu=1000., mu_T=0., N=8, BCs="no-slip", Pr_guess=1., Ra_guess=1e6,
+                 alpha=1., formulation=0, verbose=False, **kwargs):
         """
         Set up the systems of equations as a dedalus Initial Value Problem,
         without defining initial conditions.
@@ -142,7 +141,7 @@ class RB_2D_PR(RB_2D_DA):
         # Save system parameters in JSON format.
         if RANK == 0: self._save_params()
 
-    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, N, Pr_guess,
+    def setup_params(self, L, xsize, zsize, Prandtl, Rayleigh, mu, mu_T, N, Pr_guess,
                      Ra_guess, alpha, **kwargs):
         """
         Sets up the parameters for the dedalus IVP problem. Does not set up the
@@ -173,7 +172,9 @@ class RB_2D_PR(RB_2D_DA):
 
         # Driving parameters
         self.problem.parameters['mu'] = mu
+        self.problem.parameters['mu_T'] = mu_T
         self.mu = mu
+        self.mu_T = mu_T
         self.problem.parameters['N'] = N
         self.N = N
 
@@ -181,8 +182,7 @@ class RB_2D_PR(RB_2D_DA):
         self.problem.parameters["driving"] = GeneralFunction(self.problem.domain, 'g', proj, args=[])
 
         # Additional parameters necessary for formulation 1
-        if self.formulation == 1:
-            self.problem.parameters["driving_T"] = GeneralFunction(self.problem.domain, 'g', proj, args=[])
+        self.problem.parameters["driving_T"] = GeneralFunction(self.problem.domain, 'g', proj, args=[])
 
         # Parameter estimation
         self.problem.parameters['Pr_error'] = GeneralFunction(self.problem.domain, 'g', self.const_val, args=[])
@@ -219,7 +219,7 @@ class RB_2D_PR(RB_2D_DA):
 
             # Nudging equations
             self.problem.add_equation("Pr_guess*(Ra_guess*dx(T_) + dx(dx(zeta_)) + dz(zetaz_)) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - Pr_error*(dx(dx(zeta_)) + dz(zetaz_)) - (Pr_guess*Ra_error + Pr_error*Ra_guess + Pr_error*Ra_error)*dx(T_)")
-            self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_")
+            self.problem.add_equation("dt(T_) - dx(dx(T_)) - dz(Tz_) = -v_*dx(T_) - w_*Tz_ + mu_T*driving_T")
 
         elif self.formulation == 1:
 
@@ -236,7 +236,7 @@ class RB_2D_PR(RB_2D_DA):
 
             # Nudging equations
             self.problem.add_equation("Ra_guess*dx(T_) + dx(dx(zeta_)) + dz(zetaz_) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - Ra_error*dx(T_)")
-            self.problem.add_equation("dt(T_) - (1/Pr_guess)(dx(dx(T_)) + dz(Tz_)) = -v_*dx(T_) - w_*Tz_ + mu*driving_T - (Pr_error/(Pr_guess*(Pr_error + Pr_guess)))*(dx(dx(T_)) + dz(Tz_))")
+            self.problem.add_equation("dt(T_) - (1/Pr_guess)(dx(dx(T_)) + dz(Tz_)) = -v_*dx(T_) - w_*Tz_ + mu_T*driving_T - (Pr_error/(Pr_guess*(Pr_error + Pr_guess)))*(dx(dx(T_)) + dz(Tz_))")
 
     def const_val(self, value, return_field=False):
         """
@@ -254,7 +254,7 @@ class RB_2D_PR(RB_2D_DA):
             coefficient_field.set_scales(3/2)
             return coefficient_field['g']
 
-    def est_continuous_original(self):
+    def PMW_multiparameter_original(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -331,7 +331,7 @@ class RB_2D_PR(RB_2D_DA):
         Pr, PrRa = np.linalg.solve(A,b)
         return float(Pr), float(PrRa/Pr)
 
-    def est_PWM_new(self):
+    def PMW_multiparameter_new(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -395,7 +395,7 @@ class RB_2D_PR(RB_2D_DA):
         print(float(Pr), float(PrRa/Pr))
         return float(Pr), float(PrRa/Pr)
 
-    def est_Pr_new(self):
+    def PMW_Pr_new(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -431,7 +431,7 @@ class RB_2D_PR(RB_2D_DA):
 
         return gamma1/de.operators.integrate((Ih_laplace_zeta_ + self.problem.parameters['Ra']*Ih_temp_x_)**2, 'x', 'z')['g'][0,0], self.problem.parameters['Ra']
 
-    def est_Ra_new(self):
+    def PMW_Ra_new(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -468,69 +468,7 @@ class RB_2D_PR(RB_2D_DA):
 
         return self.problem.parameters['Pr'], ((gamma1/self.problem.parameters['Pr']) - alpha1)/de.operators.integrate(Ih_temp_x_**2, 'x', 'z')['g'][0,0]
 
-    def est_continuous_regularized(self):
-        """
-        Method to estimate the parameters at each step, devised by B. Pachev and
-        J. Whitehead.
-
-        Parameters:
-            zeta (dedalus field): The true system state
-        """
-
-        # Set scales
-        self.solver.state['zeta'].set_scales(1)
-        self.solver.state['zeta_'].set_scales(1)
-
-        # Projections of true state and assimilating state
-        proj_zeta = proj(self.solver.state['zeta'], self.N)
-        proj_zeta_ = proj(self.solver.state['zeta_'], self.N)
-
-        # Find the projected error
-        proj_error = self.problem.domain.new_field()
-        proj_error.set_scales(1)
-        proj_error['g'] = proj_zeta - proj_zeta_
-
-        # Get backward time derivative
-        zeta_t = self.backward_time_derivative()
-        zeta_t.set_scales(1)
-
-        # set up coefficient on Pr
-        Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(1)
-        Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
-
-        # set up coefficient on PrRa
-        Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(1)
-        Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
-
-        # set up other coefficient
-        Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(1)
-        # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
-
-        # Set up important constants
-        a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
-        b = de.operators.integrate(proj_error*Ih_temp_x_, 'x', 'z')['g'][0,0]
-        c = de.operators.integrate(proj_error*Ih_remainder_, 'x', 'z')['g'][0,0]
-
-        # Regularization weights. Can be changed
-        alpha = 1e5
-        beta = 1.
-
-        # Regularization centers
-        x0 = self.Pr_guess
-        y0 = self.Ra_guess * self.Pr_guess
-
-        # Regularized parameter estimates
-        Pr = (a*c*beta + (b**2)*x0*alpha - a*b*y0*beta)/(beta*a**2 + alpha**b*2)
-        PrRa = (b*c*alpha +(a**2)*y0*beta - a*b*x0*alpha)/(beta*a**2 + alpha**b*2)
-
-        # Return estimates
-        return float(Pr), float(PrRa/Pr)
-
-    def est_Ra_continuous(self):
+    def PMW_Ra_original(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -570,7 +508,7 @@ class RB_2D_PR(RB_2D_DA):
         # Return estimates
         return self.problem.parameters['Pr'], PrRa/self.problem.parameters['Pr']
 
-    def est_Pr_continuous(self):
+    def PMW_Pr_original(self):
         """
         Method to estimate the parameters at each step, devised by B. Pachev and
         J. Whitehead.
@@ -684,6 +622,187 @@ class RB_2D_PR(RB_2D_DA):
 
         # Get updated Rayleigh estimate
         return self.problem.parameters['Pr'], (Pr_*Ra_*d_ - Pr_*e + self.mu*f)/(Pr_*c_)
+
+    def CHL_multiparameter_simple(self):
+
+        # Get errors in state
+        PNw = proj(self.solver.state['zeta_']-self.solver.state['zeta'], self.N, return_field=True)
+        PNeta = proj(self.solver.state['T_']-self.solver.state['T'], self.N, return_field=True)
+
+        # Calculate relevant linear terms
+        PN_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
+        PN_laplace_temp = proj(self.solver.state['T'].differentiate(x=2)+self.solver.state['T'].differentiate(z=2), self.N, return_field=True)
+
+        # Calculate error norms
+        PNw2 = de.operators.integrate(PNw**2)['g'][0,0]
+        PNeta2 = de.operators.integrate(PNeta**2)['g'][0,0]
+
+        # Calculate non-degeneracy inner products
+        Ra_nondegeneracy = de.operators.integrate(PNw*PN_temp_x)['g'][0,0]
+        Pr_nondegeneracy = de.operators.integrate(PNeta*PN_laplace_temp)['g'][0,0]
+
+        # Get current parameter estimates
+        Pr_, Ra_ = self.get_parameters()
+
+        # Calculate new parameters according to "simple" formula
+        Ra = Ra_ - self.mu*PNw2/Ra_nondegeneracy
+        PrInv = (1/Pr_) - self.mu_T*PNeta2/Pr_nondegeneracy
+        return 1/PrInv, Ra
+
+    def CHL_multiparameter_complex(self):
+
+        # Get errors in state
+        PNw = proj(self.solver.state['zeta_']-self.solver.state['zeta'], self.N, return_field=True)
+        PNeta = proj(self.solver.state['T_']-self.solver.state['T'], self.N, return_field=True)
+
+        # Calculate relevant linear terms
+        PN_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
+        PN_temp__x = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
+        PN_laplace_w = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2) - self.solver.state['zeta'].differentiate(x=2) - self.solver.state['zeta_'].differentiate(z=2), self.N, return_field=True)
+        PN_laplace_temp = proj(self.solver.state['T'].differentiate(x=2)+self.solver.state['T'].differentiate(z=2), self.N, return_field=True)
+        PN_laplace_temp_ = proj(self.solver.state['T'].differentiate(x=2)+self.solver.state['T'].differentiate(z=2), self.N, return_field=True)
+
+        # Estimate relevant nonlinear terms
+        PN_N1 = proj(proj(-self.solver.state['psi_'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi_'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True) - proj(proj(-self.solver.state['psi'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True)
+        PN_N2 = proj(proj(-self.solver.state['psi_'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi_'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['T_'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True) - proj(proj(-self.solver.state['psi'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['T'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True)
+
+        # Calculate numerator inner products
+        PN_N1_ip = de.operators.integrate(PNw*PN_N1)['g'][0,0]
+        PN_laplace_w_ip = de.operators.integrate(PNw*PN_laplace_w)['g'][0,0]
+        PN_temp__x_ip = de.operators.integrate(PNw*PN_temp__x)['g'][0,0]
+
+        PN_N2_ip = de.operators.integrate(PNeta*PN_N2)['g'][0,0]
+        PN_laplace_temp__ip = de.operators.integrate(PNeta*PN_laplace_temp_)['g'][0,0]
+
+        # Calculate error norms
+        PNw2 = de.operators.integrate(PNw**2)['g'][0,0]
+        PNeta2 = de.operators.integrate(PNeta**2)['g'][0,0]
+
+        # Calculate non-degeneracy inner products
+        Ra_nondegeneracy = de.operators.integrate(PNw*PN_temp_x)['g'][0,0]
+        Pr_nondegeneracy = de.operators.integrate(PNeta*PN_laplace_temp)['g'][0,0]
+
+        # Get current parameter estimates
+        Pr_, Ra_ = self.get_parameters()
+
+        # Calculate new parameters according to "complicated" formula
+        Ra = (-PN_N1_ip + PN_laplace_w_ip + Ra_*PN_temp__x_ip - self.mu*PNw2)/Ra_nondegeneracy
+        PrInv = (-PN_N2_ip + (1/Pr_)*PN_laplace_temp__ip - self.mu_T*PNeta2)/Pr_nondegeneracy
+
+        return 1/PrInv, Ra
+
+    def CHL_Ra_simple(self):
+
+        # Get error in state
+        PNw = proj(self.solver.state['zeta_']-self.solver.state['zeta'], self.N, return_field=True)
+
+        # Calculate relevant linear term
+        PN_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
+
+        # Calculate error norm
+        PNw2 = de.operators.integrate(PNw**2)['g'][0,0]
+
+        # Calculate non-degeneracy inner product
+        Ra_nondegeneracy = de.operators.integrate(PNw*PN_temp_x)['g'][0,0]
+
+        # Get current parameter estimates
+        Pr_, Ra_ = self.get_parameters()
+        Pr = self.problem.parameters['Pr']
+
+        # Calculate new parameters according to "simple" formula
+        Ra = Ra_ - (self.mu/Pr)*(PNw2/Ra_nondegeneracy)
+        return Pr, Ra
+
+    def CHL_Ra_complex(self):
+
+        # Get errors in state
+        PNw = proj(self.solver.state['zeta_']-self.solver.state['zeta'], self.N, return_field=True)
+
+        # Calculate relevant linear terms
+        PN_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
+        PN_temp__x = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
+        PN_laplace_w = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2) - self.solver.state['zeta'].differentiate(x=2) - self.solver.state['zeta_'].differentiate(z=2), self.N, return_field=True)
+
+        # Estimate relevant nonlinear terms
+        PN_N1 = proj(proj(-self.solver.state['psi_'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi_'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True) - proj(proj(-self.solver.state['psi'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True)
+
+        # Calculate numerator inner products
+        PN_N1_ip = de.operators.integrate(PNw*PN_N1)['g'][0,0]
+        PN_laplace_w_ip = de.operators.integrate(PNw*PN_laplace_w)['g'][0,0]
+        PN_temp__x_ip = de.operators.integrate(PNw*PN_temp__x)['g'][0,0]
+
+        # Calculate error norms
+        PNw2 = de.operators.integrate(PNw**2)['g'][0,0]
+
+        # Calculate non-degeneracy inner products
+        Ra_nondegeneracy = de.operators.integrate(PNw*PN_temp_x)['g'][0,0]
+
+        # Get current parameter estimates
+        Pr_, Ra_ = self.get_parameters()
+        mu = self.mu
+        Pr = self.problem.parameters['Pr']
+
+        # Calculate new parameters according to "complicated" formula
+        Ra = (-PN_N1_ip/Pr + PN_laplace_w_ip + Ra_*PN_temp__x_ip - (self.mu/Pr)*PNw2)/Ra_nondegeneracy
+        return Pr, Ra
+
+    def CHL_Pr_simple(self):
+
+        # Get error in state
+        PNw = proj(self.solver.state['zeta_']-self.solver.state['zeta'], self.N, return_field=True)
+
+        # Calculate relevant linear terms
+        PN_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
+        PN_laplace_zeta = proj(self.solver.state['zeta'].differentiate(x=2) + self.solver.state['zeta'].differentiate(z=2), self.N, return_field=True)
+
+        # Calculate error norm
+        PNw2 = de.operators.integrate(PNw**2)['g'][0,0]
+
+        # Calculate non-degeneracy inner product
+        Ra = self.problem.parameters['Ra']
+        Pr_nondegeneracy = de.operators.integrate(PNw*PN_laplace_zeta)['g'][0,0] + Ra*de.operators.integrate(PNw*PN_temp_x)['g'][0,0]
+
+        # Get current parameter estimates
+        Pr_, Ra_ = self.get_parameters()
+
+        # Calculate new parameters according to "simple" formula
+        Pr = Pr_ - self.mu*(PNw2/Pr_nondegeneracy)
+        return Pr, Ra
+
+    def CHL_Pr_complex(self):
+
+        # Get errors in state
+        PNw = proj(self.solver.state['zeta_']-self.solver.state['zeta'], self.N, return_field=True)
+        PNeta = proj(self.solver.state['T_']-self.solver.state['T'], self.N, return_field=True)
+
+        # Calculate relevant linear terms
+        PN_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
+        PN_temp__x = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
+        PN_laplace_zeta = proj(self.solver.state['zeta'].differentiate(x=2) + self.solver.state['zeta'].differentiate(z=2), self.N, return_field=True)
+        PN_laplace_zeta_ = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N, return_field=True)
+
+        # Estimate relevant nonlinear terms
+        PN_N1 = proj(proj(-self.solver.state['psi_'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi_'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True) - proj(proj(-self.solver.state['psi'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True)
+
+        # Calculate numerator inner products
+        PN_N1_ip = de.operators.integrate(PNw*PN_N1)['g'][0,0]
+        PN_laplace_zeta__ip = de.operators.integrate(PNw*PN_laplace_zeta_)['g'][0,0]
+        PN_temp__x_ip = de.operators.integrate(PNw*PN_temp__x)['g'][0,0]
+
+        # Calculate error norms
+        PNw2 = de.operators.integrate(PNw**2)['g'][0,0]
+
+        # Calculate non-degeneracy inner products
+        Ra = self.problem.parameters['Ra']
+        Pr_nondegeneracy = de.operators.integrate(PNw*PN_laplace_zeta)['g'][0,0] + Ra*de.operators.integrate(PNw*PN_temp_x)['g'][0,0]
+
+        # Get current parameter estimates
+        Pr_, Ra_ = self.get_parameters()
+        mu = self.mu
+
+        # Calculate new parameters according to "complicated" formula
+        Pr = (-PN_N1_ip + Pr_*(PN_laplace_zeta__ip + Ra*PN_temp__x_ip) - self.mu*PNw2)/Pr_nondegeneracy
+        return Pr, Ra
 
 
     def backward_time_derivative(self):
@@ -898,22 +1017,23 @@ class RB_2D_PR(RB_2D_DA):
         self.zeta_.set_scales(1)
         self.dzeta = self.problem.domain.new_field(name='dzeta')
         self.dzeta['g'] = self.zeta['g'] - self.zeta_['g']
+        #self.dzeta = proj(self.solver.state['zeta'] - self.solver.state['zeta_'], self.N, return_field=True)
 
         # Substitute this projection for the "driving" parameter in the assimilating system
         self.problem.parameters["driving"].original_args = [self.dzeta, self.N]
         self.problem.parameters["driving"].args = [self.dzeta, self.N]
 
-        if self.formulation == 1:
-            self.T = self.solver.state['T']
-            self.T.set_scales(1)
-            self.T_ = self.solver.state['T_']
-            self.T_.set_scales(1)
-            self.dT = self.problem.domain.new_field(name='dT')
-            self.dT['g'] = self.T['g'] - self.T_['g']
+        self.T = self.solver.state['T']
+        self.T.set_scales(1)
+        self.T_ = self.solver.state['T_']
+        self.T_.set_scales(1)
+        self.dT = self.problem.domain.new_field(name='dT')
+        self.dT['g'] = self.T['g'] - self.T_['g']
+        #self.dT = proj(self.solver.state['T'] - self.solver.state['T_'], self.N, return_field=True)
 
-            # Substitute this projection for the "driving_T" parameter in the assimilating system
-            self.problem.parameters["driving_T"].original_args = [self.dT, self.N]
-            self.problem.parameters["driving_T"].args = [self.dT, self.N]
+        # Substitute this projection for the "driving_T" parameter in the assimilating system
+        self.problem.parameters["driving_T"].original_args = [self.dT, self.N]
+        self.problem.parameters["driving_T"].args = [self.dT, self.N]
 
     def get_parameters(self):
 
@@ -931,7 +1051,7 @@ class RB_2D_PR(RB_2D_DA):
         self.problem.parameters['Pr_error'].args = [Pr_error]
         self.problem.parameters['Ra_error'].args = [Ra_error]
 
-    def run_simulation(self, alg='continuous', Ra_only=True, delay_time=0.1, show_plots=False, verbose=False):
+    def run_simulation(self, alg='continuous', discrete=0.05, Ra_only=True, delay_time=0.1, show_plots=False, verbose=False):
         """
         Runs the simulation defined in self.setup_simulation, and then merges
         the results using self.merge_results.
@@ -970,73 +1090,49 @@ class RB_2D_PR(RB_2D_DA):
                     plt.axis('off')
                     plt.show()
 
-                if (self.solver.iteration > self.solver.initial_iteration) and 'continuous' in alg and self.solver.sim_time > update_time:
+                if (self.solver.iteration > self.solver.initial_iteration) and (not discrete) and self.solver.sim_time > update_time:
                 #elif self.solver.iteration > np.inf:
 
                     # Start with the old estimates
                     Pr_est, Ra_est = self.get_parameters()
 
                     # Get update (key place)
-                    if alg == 'continuous_PWM_Rayleigh_old':
-                        new_Pr_est, new_Ra_est = self.est_Ra_continuous()
+                    new_Pr_est, new_Ra_est = getattr(self, alg)(self)
 
-                    elif alg == 'continuous_PWM_Rayleigh':
-                        new_Pr_est, new_Ra_est = self.est_Ra_new()
-
-                    elif alg == 'continuous_PWM_Prandtl':
-                        new_Pr_est, new_Ra_est = self.est_Pr_new()
-
-                    elif alg == 'continuous_PWM_new':
-                        new_Pr_est, new_Ra_est = self.est_PWM_new()
-
-                    elif alg == 'continuous_PWM_regularized':
-                        new_Pr_est, new_Ra_est = self.est_continuous_regularized()
-
-
-
+                    # Print update
                     if RANK==0: print('new Pr_est: ', new_Pr_est)
                     if RANK==0: print('new Ra_est: ', new_Ra_est)
 
                     # Crank-Nicholson integration for relaxation
                     Pr_est = ((1 - 0.5*self.alpha*self.dt)*Pr_est + self.alpha*self.dt*new_Pr_est)/(1 + 0.5*self.alpha*self.dt)
                     Ra_est = ((1 - 0.5*self.alpha*self.dt)*Ra_est + self.alpha*self.dt*new_Ra_est)/(1 + 0.5*self.alpha*self.dt)
-                    if RANK==0: print('relaxed Pr_est: ', Pr_est)
-                    if RANK==0: print('relaxed Ra_est: ', Ra_est)
+                    if RANK==0: print('relaxed Pr_est (applied): ', Pr_est)
+                    if RANK==0: print('relaxed Ra_est (applied): ', Ra_est)
 
                     # Calculate parameters which should be used
                     self.update_parameters(Pr_est, Ra_est)
 
-                if 'discrete' in alg:
+                if discrete:
 
-                    if alg == 'discrete_Ra_CHL':
-                        Pr_est, Ra_est = self.est_Ra_discrete()
+                    Pr_est, Ra_est = getattr(self, alg)(self)
 
-                    elif alg == 'discrete_est_nonlinear_Ra_CHL':
-                        Pr_est, Ra_est = self.est_Ra_discrete_est_nonlinear()
-
-                    elif alg == 'discrete_PWM_new':
-                        Pr_est, Ra_est = self.est_PWM_new()
-
-                    elif alg == 'discrete_PWM_Prandtl':
-                        Pr_est, Ra_est = self.est_Pr_new()
-
-                    elif alg == 'discrete_PWM_Rayleigh':
-                        Pr_est, Ra_est = self.est_Ra_new()
-
-                    if RANK == 0: print('Ra estimate: ', Ra_est)
+                    # Print update
+                    if RANK==0: print('new Pr_est (not applied): ', new_Pr_est)
+                    if RANK==0: print('new Ra_est (not applied): ', new_Ra_est)
 
                     if self.solver.sim_time > update_time:
 
                         # Update update time
-                        update_time += 0.05
+                        update_time += update
 
                         # There might be a large jump in parameters; reduce time step to be safe
                         self.dt *= 0.01
 
                         # Calculate parameters which should be used
                         self.update_parameters(Pr_est, Ra_est)
-                        if RANK==0: print('Discrete update applied')
+                        if RANK==0: print('Update applied')
 
+                # Update driving force
                 self.update_driving()
 
                 # Step
