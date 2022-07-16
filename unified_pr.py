@@ -126,7 +126,7 @@ class RB_2D_PR(RB_2D_DA):
 
         # Set up remaining parameters
         self.setup_params(L=L, xsize=xsize, zsize=zsize, Prandtl=Prandtl,
-                          Rayleigh=Rayleigh, mu=mu, N=N, Pr_guess=Pr_guess,
+                          Rayleigh=Rayleigh, mu=mu, mu_T=mu_T, N=N, Pr_guess=Pr_guess,
                           Ra_guess=Ra_guess, alpha=alpha, **kwargs)
         self.logger.info("Parameters set up")
 
