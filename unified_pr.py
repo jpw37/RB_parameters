@@ -1051,7 +1051,7 @@ class RB_2D_PR(RB_2D_DA):
         self.problem.parameters['Pr_error'].args = [Pr_error]
         self.problem.parameters['Ra_error'].args = [Ra_error]
 
-    def run_simulation(self, alg='continuous', discrete=0.05, Ra_only=True, delay_time=0.1, show_plots=False, verbose=False):
+    def run_simulation(self, alg='continuous', discrete=0.05, delay_time=0.1, show_plots=False, verbose=False):
         """
         Runs the simulation defined in self.setup_simulation, and then merges
         the results using self.merge_results.
