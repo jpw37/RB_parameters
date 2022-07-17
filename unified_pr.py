@@ -267,52 +267,38 @@ class RB_2D_PR(RB_2D_DA):
         self.solver.state['zeta'].set_scales(1)
         self.solver.state['zeta_'].set_scales(1)
 
-        # Projections of true state
-        proj_zeta = proj(self.solver.state['zeta'], self.N)
-        proj_T = proj(self.solver.state['T'], self.N)
+        # Projection of zeta error
+        proj_zeta_err = proj(self.solver.state['zeta']-self.solver.state['zeta_'], self.N, return_field=True)
 
         # Get backward time derivative
         zeta_t = self.backward_time_derivative()
         zeta_t.set_scales(1)
 
-        # set up the alpha_i coefficients
-        Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(1)
-        Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
+        # set up coefficient on Pr
+        Ih_laplace_zeta_ = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N, return_field=True)
 
-        # set up the beta_i coefficients
-        Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(1)
-        Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
+        # set up coefficient on PrRa
+        Ih_temp_x_ = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
 
-        # set up the gamma_i coefficients
-        Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(1)
-        # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
+        # set up other coefficient
+        # u = [v, w] = [-psi_z, psi_x]
+        Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
-        # Set e1 to be the projection of the error, guaranteeing exponential decay of the error
+        # Define fields for basis vectors e1 and e2
         e1 = self.problem.domain.new_field()
-        e1.set_scales(1)
-        e1['g'] = proj_zeta - proj(self.solver.state['zeta_'], self.N)
-
-        # Normalize
-        e1['g'] /= np.sqrt(de.operators.integrate(e1**2, 'x', 'z')['g'][0,0])
-
-        # Many choices are possible for e2
         e2 = self.problem.domain.new_field()
-        e2.set_scales(1)
+
+        # Set data in e1 and e2
+        e1['g'] = proj_zeta_err['g']
         e2['g'] = Ih_temp_x_['g']
 
-        # Another possibility (to guarantee decay of error in H1)
-        # e2['g'] = e1.differentiate(z=2)['g'] + e1.differentiate(x=2)['g']
-
-        #Perform modified Gram-Schmidt on e1 and e2 (no need to normalize)
-        c = de.operators.integrate(e1*e2,'x','z')['g']*e1['g']
-        e2['g'] = e2['g'] - c
-
-        # Normalize
-        e2['g'] /= np.sqrt(de.operators.integrate(e2**2, 'x', 'z')['g'][0,0])
+        # Perform Gram-Schmidt and normalization
+        norm1 = np.sqrt(de.operators.integrate(e1**2)['g'][0,0])
+        e1['g'] /= norm1
+        p = de.operators.integrate(e1*e2,'x','z')['g']*e1['g']
+        e2['g'] = e2['g'] - p
+        norm2 = np.sqrt(de.operators.integrate(e2**2)['g'][0,0])
+        e2['g'] /= norm2
 
         # Now e1 and e2 should be orthogonal. Calculate the coefficients
         alpha1 = de.operators.integrate(e1*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
@@ -328,7 +314,13 @@ class RB_2D_PR(RB_2D_DA):
         A = np.array([[alpha1, beta1], [alpha2, beta2]])
         b = np.array([[gamma1], [gamma2]])
 
+        print('Matrix: ', A)
+        print('determinant: ', np.linalg.det(A))
+        print('vector: ', b)
+
         Pr, PrRa = np.linalg.solve(A,b)
+
+        print(float(Pr), float(PrRa/Pr))
         return float(Pr), float(PrRa/Pr)
 
     def PMW_multiparameter_new(self):
@@ -361,16 +353,21 @@ class RB_2D_PR(RB_2D_DA):
         # u = [v, w] = [-psi_z, psi_x]
         Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
-        # Set e1 and e2 to be the projections of the first and second nonlinear terms in the nudged system
-        e1 = Ih_laplace_zeta_/np.sqrt(de.operators.integrate(Ih_laplace_zeta_**2, 'x', 'z')['g'][0,0])
-        e2 = Ih_temp_x_
+        # Define fields for basis vectors e1 and e2
+        e1 = self.problem.domain.new_field()
+        e2 = self.problem.domain.new_field()
 
-        # Perform modified Gram-Schmidt on e1 and e2 (no need to normalize)
-        c = de.operators.integrate(e1*e2,'x','z')['g']*e1['g']
-        e2['g'] = e2['g'] - c
+        # Set data in e1 and e2
+        e1['g'] = Ih_laplace_zeta_['g']
+        e2['g'] = Ih_temp_x_['g']
 
-        # Normalize e2
-        e2['g'] /= np.sqrt(de.operators.integrate(e2**2, 'x', 'z')['g'][0,0])
+        # Perform Gram-Schmidt and normalization
+        norm1 = np.sqrt(de.operators.integrate(e1**2)['g'][0,0])
+        e1['g'] /= norm1
+        p = de.operators.integrate(e1*e2,'x','z')['g']*e1['g']
+        e2['g'] = e2['g'] - p
+        norm2 = np.sqrt(de.operators.integrate(e2**2)['g'][0,0])
+        e2['g'] /= norm2
 
         # Now e1 and e2 should be orthogonal. Calculate the coefficients
         alpha1 = de.operators.integrate(e1*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
@@ -461,7 +458,8 @@ class RB_2D_PR(RB_2D_DA):
         Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
         # Set e1 and e2 to be the projections of the first and second nonlinear terms in the nudged system
-        e1 = Ih_temp_x_
+        e1 = self.problem.domain.new_field()
+        e1['g'] = Ih_temp_x_['g']
 
         alpha1 = de.operators.integrate(e1*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
         gamma1 = de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
@@ -521,44 +519,29 @@ class RB_2D_PR(RB_2D_DA):
         self.solver.state['zeta'].set_scales(1)
         self.solver.state['zeta_'].set_scales(1)
 
-        # Projections of true state and assimilating state
-        proj_zeta = proj(self.solver.state['zeta'], self.N)
-        proj_zeta_ = proj(self.solver.state['zeta_'], self.N)
-
-        # Find the projected error
-        proj_error = self.problem.domain.new_field()
-        proj_error.set_scales(1)
-        proj_error['g'] = proj_zeta - proj_zeta_
+        # Projection of zeta error
+        proj_zeta_err = proj(self.solver.state['zeta']-self.solver.state['zeta_'], self.N, return_field=True)
 
         # Get backward time derivative
         zeta_t = self.backward_time_derivative()
         zeta_t.set_scales(1)
 
         # set up coefficient on Pr
-        Ih_laplace_zeta_ = self.problem.domain.new_field()
-        Ih_laplace_zeta_.set_scales(1)
-        Ih_laplace_zeta_['g'] = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N)
+        Ih_laplace_zeta_ = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2), self.N, return_field=True)
 
         # set up coefficient on PrRa
-        Ih_temp_x_ = self.problem.domain.new_field()
-        Ih_temp_x_.set_scales(1)
-        Ih_temp_x_['g'] = proj(self.solver.state['T_'].differentiate(x=1),self.N)
+        Ih_temp_x_ = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
 
         # set up other coefficient
-        Ih_remainder_ = self.problem.domain.new_field()
-        Ih_remainder_.set_scales(1)
-        # v = -psi_z, w = psi_x
-        Ih_remainder_['g'] = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N)
+        Ih_remainder_ = proj(-self.solver.state['psi_'].differentiate(z=1)*self.solver.state['zeta_'].differentiate(x=1) + self.solver.state['psi_'].differentiate(x=1)*self.solver.state['zeta_'].differentiate(z=1) + zeta_t, self.N, return_field=True)
 
-        # Set up important constants
-        a = de.operators.integrate(proj_error*Ih_laplace_zeta_, 'x', 'z')['g'][0,0]
-        b = de.operators.integrate(proj_error*Ih_temp_x_, 'x', 'z')['g'][0,0]
-        c = de.operators.integrate(proj_error*Ih_remainder_, 'x', 'z')['g'][0,0]
+        # Set e1 to be the projection of the term on Pr (assuming Ra is known)
+        e1 = self.problem.domain.new_field()
+        e1['g'] = proj_zeta_err['g']
 
-        Pr = (c - b*self.problem.parameters['Pr']*self.problem.parameters['Ra'])/a
+        gamma1 = de.operators.integrate(e1*Ih_remainder_, 'x', 'z')['g'][0,0]
 
-        # Return estimates
-        return Pr, self.problem.parameters['Ra']
+        return gamma1/de.operators.integrate((Ih_laplace_zeta_ + self.problem.parameters['Ra']*Ih_temp_x_)**2, 'x', 'z')['g'][0,0], self.problem.parameters['Ra']
 
     def est_Ra_discrete_est_nonlinear(self):
 
@@ -1114,16 +1097,16 @@ class RB_2D_PR(RB_2D_DA):
 
                 if discrete:
 
-                    Pr_est, Ra_est = getattr(self, alg)(self)
+                    Pr_est, Ra_est = getattr(self, alg)()
 
                     # Print update
-                    if RANK==0: print('new Pr_est (not applied): ', new_Pr_est)
-                    if RANK==0: print('new Ra_est (not applied): ', new_Ra_est)
+                    if RANK==0: print('new Pr_est (not applied): ', Pr_est)
+                    if RANK==0: print('new Ra_est (not applied): ', Ra_est)
 
                     if self.solver.sim_time > update_time:
 
                         # Update update time
-                        update_time += update
+                        update_time += discrete
 
                         # There might be a large jump in parameters; reduce time step to be safe
                         self.dt *= 0.01
