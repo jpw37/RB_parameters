@@ -236,7 +236,7 @@ class RB_2D_PR(RB_2D_DA):
 
             # Nudging equations
             self.problem.add_equation("Ra_guess*dx(T_) + dx(dx(zeta_)) + dz(zetaz_) - dt(zeta_) = v_*dx(zeta_) + w_*zetaz_ - mu*driving - Ra_error*dx(T_)")
-            self.problem.add_equation("dt(T_) - (1/Pr_guess)(dx(dx(T_)) + dz(Tz_)) = -v_*dx(T_) - w_*Tz_ + mu_T*driving_T - (Pr_error/(Pr_guess*(Pr_error + Pr_guess)))*(dx(dx(T_)) + dz(Tz_))")
+            self.problem.add_equation("dt(T_) - (1/Pr_guess)*(dx(dx(T_)) + dz(Tz_)) = -v_*dx(T_) - w_*Tz_ + mu_T*driving_T - (Pr_error/(Pr_guess*(Pr_error + Pr_guess)))*(dx(dx(T_)) + dz(Tz_))")
 
     def const_val(self, value, return_field=False):
         """
