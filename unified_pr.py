@@ -641,7 +641,7 @@ class RB_2D_PR(RB_2D_DA):
         # Calculate relevant linear terms
         PN_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
         PN_temp__x = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
-        PN_laplace_w = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2) - self.solver.state['zeta'].differentiate(x=2) - self.solver.state['zeta_'].differentiate(z=2), self.N, return_field=True)
+        PN_laplace_w = proj(self.solver.state['zeta_'].differentiate(z=2) + self.solver.state['zeta_'].differentiate(x=2) - self.solver.state['zeta'].differentiate(z=2) - self.solver.state['zeta_'].differentiate(x=2), self.N, return_field=True)
         PN_laplace_temp = proj(self.solver.state['T'].differentiate(x=2)+self.solver.state['T'].differentiate(z=2), self.N, return_field=True)
         PN_laplace_temp_ = proj(self.solver.state['T'].differentiate(x=2)+self.solver.state['T'].differentiate(z=2), self.N, return_field=True)
 
@@ -704,7 +704,7 @@ class RB_2D_PR(RB_2D_DA):
         # Calculate relevant linear terms
         PN_temp_x = proj(self.solver.state['T'].differentiate(x=1), self.N, return_field=True)
         PN_temp__x = proj(self.solver.state['T_'].differentiate(x=1), self.N, return_field=True)
-        PN_laplace_w = proj(self.solver.state['zeta_'].differentiate(x=2) + self.solver.state['zeta_'].differentiate(z=2) - self.solver.state['zeta'].differentiate(x=2) - self.solver.state['zeta_'].differentiate(z=2), self.N, return_field=True)
+        PN_laplace_w = proj(self.solver.state['zeta_'].differentiate(z=2) + self.solver.state['zeta_'].differentiate(x=2) - self.solver.state['zeta'].differentiate(z=2) - self.solver.state['zeta_'].differentiate(x=2), self.N, return_field=True)
 
         # Estimate relevant nonlinear terms
         PN_N1 = proj(proj(-self.solver.state['psi_'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi_'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta_'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True) - proj(proj(-self.solver.state['psi'].differentiate(z=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(x=1), self.N, return_field=True) + proj(self.solver.state['psi'].differentiate(x=1), self.N, return_field=True)*proj(self.solver.state['zeta'].differentiate(z=1), self.N, return_field=True), self.N, return_field=True)
