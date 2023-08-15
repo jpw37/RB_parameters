@@ -59,7 +59,10 @@ class BaseSimulator:
 
         # Log information to a logfile in the records directory.
         logger = logging.getLogger(records_dir + str(RANK))
-        logger.setLevel(logging.DEBUG)
+        if RANK == 0:
+            logger.setLevel(logging.DEBUG)
+        else:
+            logger.setLevel(logging.WARNING)
         if log and len(logger.handlers) == 0:
             logfile = logging.FileHandler(os.path.join(records_dir, LOG_FILE))
             logfile.setFormatter(logging.Formatter(LOG_FORMAT))

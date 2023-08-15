@@ -12,7 +12,7 @@ import h5py
 import time
 import numpy as np
 from scipy.integrate import simps
-from sklearn.cluster import KMeans
+#from sklearn.cluster import KMeans
 from matplotlib import pyplot as plt
 from matplotlib.colors import SymLogNorm
 from matplotlib.animation import writers as mplwriters

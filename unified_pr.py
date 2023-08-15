@@ -18,7 +18,6 @@ from matplotlib.animation import writers as mplwriters
 try:
     from tqdm import tqdm
 except ImportError:
-    print("Recommended: install tqdm (pip install tqdm)")
     tqdm = lambda x: x
 from functools import partial
 
@@ -383,9 +382,9 @@ class RB_2D_PR(RB_2D_DA):
         A = np.array([[alpha1, beta1], [alpha2, beta2]])
         b = np.array([[gamma1], [gamma2]])
 
-        print('Matrix: ', A)
-        print('determinant: ', np.linalg.det(A))
-        print('vector: ', b)
+        #print('Matrix: ', A)
+        #print('determinant: ', np.linalg.det(A))
+        #print('vector: ', b)
 
         Pr, PrRa = np.linalg.solve(A,b)
 
@@ -1080,7 +1079,7 @@ class RB_2D_PR(RB_2D_DA):
                     Pr_est, Ra_est = self.get_parameters()
 
                     # Get update (key place)
-                    new_Pr_est, new_Ra_est = getattr(self, alg)(self)
+                    new_Pr_est, new_Ra_est = getattr(self, alg)()
 
                     # Print update
                     if RANK==0: print('new Pr_est: ', new_Pr_est)
