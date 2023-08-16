@@ -302,15 +302,15 @@ class RB_2D(BaseSimulator):
                 analysis_tasks = [
                                   ("1 + integ(w*T , 'x', 'z')/L", "Nu_1"),
                                   ("integ(dx(T)**2 + Tz**2, 'x', 'z')/L", "Nu_2"),
-                                  ("integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z')", "Nu_3"),
+                                  ("1 + (1/(L*Ra))*integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z')", "Nu_3"),
                                   ("sqrt(integ(T**2, 'x', 'z'))", "T_L2"),
                                   ("sqrt( integ(dx(T)**2 + dz(T)**2, 'x', 'z'))", "gradT_L2"),
                                   ("sqrt( integ(v**2 + w**2, 'x', 'z'))", "u_L2"),
                                   ("sqrt( integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z'))", "gradu_L2"),
                                   ("sqrt( integ(dx(dx(T))**2 + dx(dz(T))**2 + dz(dz(T))**2, 'x', 'z'))", "T_h2"),
-                                  ("sqrt(integ( dx(dx(v))**2 + dz(dz(v))**2 + dx(dz(v))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2"),
-                                  ("P_N( zeta )", "Proj")
+                                  ("sqrt(integ( dx(dx(v))**2 + dz(dz(v))**2 + dx(dz(v))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2")
                                  ]
+                                 #("P_N( zeta )", "Proj")
 
             for task, name in analysis_tasks: self.annals.add_task(task, name=name)
 

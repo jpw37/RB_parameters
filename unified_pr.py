@@ -313,13 +313,13 @@ class RB_2D_PR(RB_2D_DA):
         A = np.array([[alpha1, beta1], [alpha2, beta2]])
         b = np.array([[gamma1], [gamma2]])
 
-        print('Matrix: ', A)
-        print('determinant: ', np.linalg.det(A))
-        print('vector: ', b)
+        #print('Matrix: ', A)
+        #print('determinant: ', np.linalg.det(A))
+        #print('vector: ', b)
 
         Pr, PrRa = np.linalg.solve(A,b)
 
-        print(float(Pr), float(PrRa/Pr))
+        if RANK == 0: print(float(Pr), float(PrRa/Pr))
         return float(Pr), float(PrRa/Pr)
 
     def PMW_multiparameter_new(self):
@@ -388,7 +388,7 @@ class RB_2D_PR(RB_2D_DA):
 
         Pr, PrRa = np.linalg.solve(A,b)
 
-        print(float(Pr), float(PrRa/Pr))
+        if RANK == 0: print(float(Pr), float(PrRa/Pr))
         return float(Pr), float(PrRa/Pr)
 
     def PMW_Pr_new(self):
@@ -929,7 +929,7 @@ class RB_2D_PR(RB_2D_DA):
                 analysis_tasks = [
                                   ("1 + integ(w*T , 'x', 'z')/L", "Nu_1"),
                                   ("integ(dx(T)**2 + Tz**2, 'x', 'z')/L", "Nu_2"),
-                                  ("integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z')", "Nu_3"),
+                                  ("1 + (1/(L*Ra))*integ(dx(v)**2 + dz(v)**2 + dx(w)**2 + dz(w)**2, 'x', 'z')", "Nu_3"),
                                   ("1 + integ(w_*T_ , 'x', 'z')/L", "Nu_1_da"),
                                   ("integ(dx(T_)**2 + Tz_**2, 'x', 'z')/L", "Nu_2_da"),
                                   ("integ(dx(v_)**2 + dz(v_)**2 + dx(w_)**2 + dz(w_)**2, 'x', 'z')", "Nu_3_da"),
@@ -942,6 +942,7 @@ class RB_2D_PR(RB_2D_DA):
                                   ("sqrt(integ((T-T_)**2, 'x', 'z'))", "T_err"),
                                   ("sqrt(integ(dx(T-T_)**2+dz(T-T_)**2, 'x', 'z'))", "gradT_err"),
                                   ("sqrt(integ((v-v_)**2 + (w-w_)**2, 'x', 'z'))", "u_err"),
+                                  ("sqrt(integ((v-v_)**2 + (w-w_)**2, 'x', 'z'))/sqrt(integ(v**2 + w**2, 'x', 'z'))", "u_rel_err"),
                                   ("sqrt(integ(dx(v-v_)**2 + dz(v-v_)**2 + dx(w-w_)**2 + dz(w-w_)**2, 'x', 'z'))", "gradu_err"),
                                   ("sqrt( integ(dx(dx(T-T_))**2 + dx(dz(T-T_))**2 + dz(dz(T-T_))**2, 'x', 'z'))", "T_h2_err"),
                                   ("sqrt(integ( dx(dx(v-v_))**2 + dz(dz(v-v_))**2 + dx(dz(v-v_))**2 + dx(dz(w))**2 + dx(dx(w))**2 + dz(dz(w))**2, 'x','z'))", "u_h2_err"),
